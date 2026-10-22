@@ -748,13 +748,13 @@
     /* --- 6. 退出诊断 --- */
     const exitSec = viewExitSection();
 
-    /* --- 7. 数据质量（v4 新增） --- */
-    const qualSec = viewQualitySection();
-
-    /* --- 8. 一键总结 --- */
+    /* --- 7. 一键总结 --- */
     const sumSec = overviewSummary(y, yo, okRows, byGap, byGate, byCap);
 
-    return hero + trendSec + posChart + boards + indSec + provSec + exitSec + qualSec + sumSec;
+    /* --- 8. 数据质量（v4 新增，作为证据附录收尾） --- */
+    const qualSec = viewQualitySection();
+
+    return hero + trendSec + posChart + boards + indSec + provSec + exitSec + sumSec + qualSec;
   }
 
   /* ==================== 十年全局趋势（v3 新增） ==================== */
