@@ -49,6 +49,9 @@ nav{display:flex;gap:2px;margin-left:auto;overflow-x:auto}
 .tab:hover{background:#EFF3F8;color:var(--ink2)}
 .tab.on{background:var(--blue);color:#fff;font-weight:600}
 .tab.enterprise.on{background:var(--blue-d)}
+/* 「方法与数据」是抽屉入口，不是页签，用描边区分 */
+.tab.meta{border:1px solid var(--line);background:#fff;margin-left:6px}
+.tab.meta:hover{border-color:var(--blue);background:#F4F9FC;color:var(--blue)}
 
 /* ============ 布局 ============ */
 main{max-width:1280px;margin:0 auto;padding:22px 24px 60px}
@@ -389,23 +392,273 @@ main{max-width:1280px;margin:0 auto;padding:22px 24px 60px}
 
 .empty{padding:40px;text-align:center;color:var(--dim);font-size:13.5px}
 
+/* ============ v4：首屏叙事 ============ */
+.eyebrow{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
+  color:var(--blue-d);background:#EAF3F8;border:1px solid #CFE3EE;border-radius:20px;
+  padding:3px 11px;letter-spacing:.02em;margin-bottom:9px}
+.eyebrow i{width:5px;height:5px;border-radius:50%;background:var(--blue);font-style:normal}
+.qline{display:flex;gap:0;margin-top:14px;background:#fff;border:1px solid var(--line);
+  border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+.qline>div{flex:1;padding:12px 16px;border-right:1px solid var(--line2);min-width:0}
+.qline>div:last-child{border-right:0}
+.qline .qn{font-size:11px;font-weight:700;color:var(--blue);letter-spacing:.06em;
+  display:block;margin-bottom:3px}
+.qline .qt{font-size:13.2px;color:var(--ink);font-weight:600;line-height:1.45;display:block}
+.qline .qa{font-size:11.8px;color:var(--muted);display:block;margin-top:4px;line-height:1.5}
+.findings{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+.find{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:15px 17px 14px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.find::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--blue)}
+.find.f2::before{background:var(--red)}
+.find.f3::before{background:var(--green)}
+.find .fh{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.find .fnum{font-size:22px;font-weight:720;letter-spacing:-.02em;color:var(--ink);
+  font-variant-numeric:tabular-nums;line-height:1.1}
+.find .fnum i{font-size:12px;font-style:normal;font-weight:600;color:var(--muted);margin-left:2px}
+.find .ftag{font-size:11px;color:var(--dim)}
+.find .ft{font-size:12.8px;color:var(--ink2);line-height:1.62}
+.find .ft b{color:var(--ink);font-weight:680}
+.guide{margin-top:14px;background:linear-gradient(180deg,#FBFDFF 0%,#F3F8FC 100%);
+  border:1px solid #D3E3EE;border-radius:12px;padding:13px 17px}
+.guide-h{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:680;
+  color:var(--blue-d);margin-bottom:11px;flex-wrap:wrap}
+.guide-h em{font-style:normal;font-size:10.5px;font-weight:600;color:var(--muted);
+  background:#fff;border:1px solid #CFE3EE;border-radius:20px;padding:1px 9px}
+.gsteps{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.gstep{display:flex;gap:10px;align-items:flex-start;background:#fff;border:1px solid var(--line);
+  border-radius:9px;padding:10px 12px;cursor:pointer;transition:.15s;text-align:left;
+  font:inherit;width:100%}
+.gstep:hover{border-color:var(--blue);box-shadow:0 2px 10px rgba(46,134,171,.12);
+  transform:translateY(-1px)}
+.gstep .gn{flex:0 0 21px;height:21px;border-radius:50%;background:var(--blue);color:#fff;
+  font-size:11.5px;font-weight:700;display:grid;place-items:center;margin-top:1px}
+.gstep b{display:block;font-size:12.8px;color:var(--ink);font-weight:640;margin-bottom:2px}
+.gstep span{display:block;font-size:11.6px;color:var(--muted);line-height:1.5}
+.gstep .gar{margin-left:auto;color:var(--dim);font-size:13px;align-self:center}
+
+/* ============ v4：方法与数据抽屉 ============ */
+body.drawer-open{overflow:hidden}
+.mdrawer{position:fixed;inset:0;z-index:200;display:none}
+.mdrawer.on{display:block}
+.mdrawer-bg{position:absolute;inset:0;background:rgba(20,29,42,.42);
+  backdrop-filter:blur(2px);animation:mfade .2s ease}
+@keyframes mfade{from{opacity:0}to{opacity:1}}
+.mdrawer-panel{position:absolute;top:0;right:0;bottom:0;width:min(760px,94vw);
+  background:var(--bg);box-shadow:-8px 0 40px rgba(20,29,42,.16);
+  display:flex;flex-direction:column;animation:mslide .26s cubic-bezier(.2,.8,.2,1)}
+@keyframes mslide{from{transform:translateX(28px);opacity:.6}to{transform:none;opacity:1}}
+.mdrawer-head{flex:0 0 auto;display:flex;align-items:center;gap:12px;
+  padding:16px 22px;background:#fff;border-bottom:1px solid var(--line)}
+.mdrawer-head h2{font-size:16px}
+.mdrawer-head p{font-size:11.8px;color:var(--muted);margin-top:1px}
+.mdrawer-close{margin-left:auto;border:1px solid var(--line);background:#fff;font:inherit;
+  font-size:12.5px;color:var(--muted);padding:6px 14px;border-radius:8px;cursor:pointer;
+  transition:.14s;flex-shrink:0}
+.mdrawer-close:hover{border-color:var(--blue);color:var(--blue);background:#F4F9FC}
+.mdrawer-body{flex:1;overflow-y:auto;padding:18px 22px 40px;-webkit-overflow-scrolling:touch}
+.mdrawer-body .card{padding:16px 18px;margin-bottom:13px}
+.mdrawer-body h3{font-size:14px;margin-bottom:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mdrawer-body h3 em{font-style:normal;font-size:10.5px;font-weight:600;color:var(--muted);
+  background:#EEF2F7;border-radius:5px;padding:1px 7px}
+.mtable{width:100%;border-collapse:collapse;font-size:12.4px;margin-top:4px}
+.mtable th{text-align:left;padding:8px 9px;font-weight:600;color:var(--muted);font-size:11.5px;
+  border-bottom:1.5px solid var(--line);white-space:nowrap}
+.mtable td{padding:9px;border-bottom:1px solid var(--line2);color:var(--ink2);
+  vertical-align:top;line-height:1.55}
+.mtable td b{color:var(--ink);font-weight:640}
+.mtable td.mnum{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:640;color:var(--ink)}
+.mtable tr:last-child td{border-bottom:0}
+.mtag{display:inline-block;font-size:10.5px;font-weight:600;border-radius:4px;
+  padding:1px 6px;margin-top:3px;white-space:nowrap}
+/* 第一列（环节名 + 类别标签）不能被压成竖排 */
+.mtable td:first-child{min-width:104px}
+.mtable td:first-child b{display:inline-block;white-space:nowrap}
+.mtag.s{background:#EAEEF3;color:var(--muted)}
+.mtag.g{background:#EDF5F1;color:#3E7D62}
+.mtag.a{background:#FFF6E5;color:#8A6510}
+.deflist{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:12.4px;
+  margin-top:4px;align-items:baseline}
+.deflist dt{color:var(--muted);font-weight:600;white-space:nowrap}
+.deflist dd{color:var(--ink2);line-height:1.6}
+.deflist dd b{color:var(--ink)}
+.bounds{list-style:none;margin-top:2px}
+.bounds li{font-size:12.4px;color:var(--ink2);line-height:1.62;padding:7px 0 7px 20px;
+  position:relative;border-bottom:1px solid var(--line2)}
+.bounds li:last-child{border-bottom:0}
+.bounds li::before{content:"!";position:absolute;left:0;top:8px;width:14px;height:14px;
+  border-radius:50%;background:#FFF6E5;color:#8A6510;font-size:10px;font-weight:700;
+  display:grid;place-items:center}
+.bounds li b{color:var(--ink)}
+
+/* ============ v4：企业对比 ============ */
+.cmpbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.cmpbar input{font:inherit;font-size:13px;padding:7px 12px;border-radius:8px;
+  border:1px solid var(--line);background:#fff;color:var(--ink);outline:none;width:190px}
+.cmpbar input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(46,134,171,.1)}
+.cmpbar .xbtn{padding:7px 14px}
+.cmpchips{display:flex;gap:7px;flex-wrap:wrap}
+.cmpchip{display:inline-flex;align-items:center;gap:7px;background:#EAF3F8;
+  border:1px solid #CFE3EE;border-radius:20px;padding:4px 8px 4px 12px;font-size:12.2px;
+  color:var(--blue-d);font-weight:600}
+.cmpchip em{font-style:normal;font-size:10.5px;color:var(--muted);font-weight:500}
+.cmpchip button{border:0;background:none;cursor:pointer;color:var(--dim);font-size:14px;
+  line-height:1;padding:0 2px}
+.cmpchip button:hover{color:var(--red)}
+.cmptable{width:100%;border-collapse:collapse;font-size:12.6px;
+  font-variant-numeric:tabular-nums;margin-top:6px}
+.cmptable th,.cmptable td{padding:9px 10px;border-bottom:1px solid var(--line2);text-align:center}
+.cmptable th{font-size:11.8px;color:var(--muted);font-weight:600;border-bottom:1.5px solid var(--line)}
+.cmptable th.l,.cmptable td.l{text-align:left;color:var(--muted);font-weight:600;white-space:nowrap}
+.cmptable td b{font-size:14px;color:var(--ink);font-weight:680}
+.cmptable td .u{color:var(--red);font-weight:600}
+.cmptable td .d{color:var(--green);font-weight:600}
+.cmptable tr.best td{background:#F4F9FC}
+.cmptable .vbadge{display:inline-block;font-size:11px;font-weight:640;border-radius:5px;
+  padding:2px 9px}
+.cmpscroll{overflow-x:auto}
+
+/* ============ v4：数据质量热力图 ============ */
+.heatwrap{overflow-x:auto;margin-top:8px;padding-bottom:6px}
+.heat{display:block;min-width:640px}
+.heatlegend{display:flex;align-items:center;gap:7px;margin-top:10px;font-size:11.5px;
+  color:var(--muted);flex-wrap:wrap}
+.heatlegend .bar{width:120px;height:9px;border-radius:5px;
+  background:linear-gradient(90deg,#F2F5F8 0%,#CFE0EA 35%,#7FB6CE 70%,#2E86AB 100%)}
+.heatlegend .bar i{display:block;height:100%;border-radius:5px}
+
+/* ============ v4：样本漏斗 ============ */
+.funnel{margin-top:10px}
+.fstep{display:grid;grid-template-columns:126px 1fr;gap:9px 10px;align-items:start;margin-bottom:9px}
+.fstep .fl{color:var(--muted);font-weight:600;font-size:11.9px;text-align:right;
+  line-height:1.3;padding-top:5px}
+.fstep .fl em{display:block;font-style:normal;font-size:10.2px;color:var(--dim);
+  font-weight:500;margin-top:3px;line-height:1.35}
+.fstep .fbar{height:24px;border-radius:5px;background:linear-gradient(90deg,#2E86AB,#5AA7C4);
+  display:flex;align-items:center;justify-content:flex-end;padding:0 9px;min-width:54px;
+  color:#fff;font-size:11.6px;font-weight:640;font-variant-numeric:tabular-nums;
+  transition:width .35s ease;white-space:nowrap}
+.fstep.f2 .fbar{background:linear-gradient(90deg,#4A6FA5,#7E9BC4)}
+.fstep.f3 .fbar{background:linear-gradient(90deg,#7B61A8,#A08FC4)}
+.fstep.f4 .fbar{background:linear-gradient(90deg,#8A99A8,#B4BFCA)}
+.fstep .fn{font-size:10.8px;color:var(--dim);margin-top:4px;line-height:1.4}
+.funote{font-size:12px;color:var(--muted);line-height:1.7;margin-top:10px;
+  padding-top:10px;border-top:1px solid var(--line2)}
+
+/* ============ v4：对比表当前列 ============ */
+.cmptable th.foc{color:var(--blue-d);background:#F4F9FC;border-bottom-color:#9CC5D8}
+.cmptable td.foc{background:#F7FBFD}
+.cmptable tr:last-child td{border-bottom:0}
+.cmptable td.l em{display:block;font-style:normal;font-size:10.5px;color:var(--dim);
+  font-weight:500;white-space:normal;line-height:1.4;margin-top:1px}
+.cmpfoot{font-size:11.6px;color:var(--dim);line-height:1.7;margin-top:9px}
+.cmpfoot b{color:var(--muted)}
+
+/* ============ v4：打印区（企业体检报告 PDF） ============ */
+#printarea{display:none}
+
+/* ============ v4：移动端 ============ */
+@media (max-width:1080px){
+  .grid3{grid-template-columns:1fr}
+  .grid2{grid-template-columns:1fr}
+  .findings{grid-template-columns:1fr}
+  .qline{flex-direction:column}
+  .qline>div{border-right:0;border-bottom:1px solid var(--line2)}
+  .qline>div:last-child{border-bottom:0}
+  .gsteps{grid-template-columns:1fr}
+  .indwrap,.provwrap{grid-template-columns:1fr;gap:14px}
+  .risk2{grid-template-columns:1fr;gap:14px}
+  .verdict-scroll{overflow-x:auto}
+}
+@media (max-width:720px){
+  .hwrap{padding:0 14px;gap:10px;height:auto;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+  nav{margin-left:0;width:100%;gap:4px}
+  .tab{padding:7px 11px;font-size:13px}
+  main{padding:14px 12px 40px}
+  h1{font-size:20px} .firm-head h2{font-size:17px}
+  .card{padding:14px 13px;border-radius:12px}
+  .kpis{grid-template-columns:repeat(2,1fr);gap:8px}
+  .kpi{padding:11px 12px}
+  .kpi b{font-size:20px}
+  .statline>div{min-width:45%;padding:9px 6px}
+  .statline b{font-size:15px}
+  .find{padding:13px 14px}
+  .find .fnum{font-size:19px}
+  .guide{padding:11px 13px}
+  .gstep{padding:9px 11px}
+  /* 图表在窄屏给足高度，避免被压扁看不清 */
+  .chart{min-height:210px}
+  .heat{min-width:560px}
+  .mdrawer-panel{width:100vw}
+  .mdrawer-head{padding:13px 15px}
+  .mdrawer-body{padding:14px 15px 40px}
+  .mtable{font-size:11.6px}
+  .mtable th,.mtable td{padding:7px 6px}
+  .deflist{grid-template-columns:1fr;gap:2px 0}
+  .deflist dt{margin-top:7px}
+  .searchbox{max-width:none;flex-wrap:wrap}
+  .searchbox input{min-width:0;flex:1 1 140px}
+  .searchbox button{flex:0 0 auto;padding:10px 16px}
+  .firm-head{gap:12px}
+  .firmhead-right{align-items:flex-start;width:100%}
+  .vscale{min-width:0;width:100%}
+  .cmpbar input{width:100%}
+  .cmpscroll{overflow-x:auto}
+  .cmpscroll svg{min-width:520px}
+  .cmptable{min-width:480px}
+  .hero .sub{font-size:12.5px}
+  .qline>div{padding:10px 13px}
+  .qline .qt{font-size:12.6px}
+  .heronote{font-size:11.8px}
+  .rules li p{font-size:12.2px}
+}
+
 footer{max-width:1280px;margin:0 auto;padding:0 24px 40px;
   font-size:11.5px;color:var(--dim);line-height:1.75}
 footer b{color:var(--muted);font-weight:600}
 
-/* ============ 响应式 ============ */
-@media (max-width:1080px){
-  .grid3{grid-template-columns:1fr}
-  .grid2{grid-template-columns:1fr}
-}
-@media (max-width:720px){
-  .hwrap{padding:0 14px;gap:12px;height:auto;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
-  nav{margin-left:0;width:100%}
-  main{padding:16px 14px 40px}
-  h1{font-size:21px} .firm-head h2{font-size:18px}
-  .card{padding:16px 15px}
-  .kpis{grid-template-columns:repeat(2,1fr)}
-  .statline>div{min-width:45%}
+/* ============ 打印（企业体检报告导出 PDF 用） ============ */
+@page{margin:14mm 13mm}
+@media print{
+  /* 只打印 #printarea，页面本体隐藏 */
+  body>*:not(#printarea){display:none!important}
+  #printarea{display:block!important}
+  body{background:#fff;font-size:10.5pt}
+  header,footer,nav,.sectools,.exportrow,.searchbox,.quick,.cmpbar,.guide,.gstep,
+  .tab,.xbtn,.warnbar{display:none!important}
+  main{padding:0;max-width:none}
+  .card{border:1px solid #D8DEE6;box-shadow:none;break-inside:avoid;page-break-inside:avoid;
+    background:#fff!important;padding:13px 15px;margin-bottom:11px}
+  .grid2,.grid3,.risk2{grid-template-columns:1fr 1fr!important;gap:10px}
+  .chart{max-height:280px}
+  a{color:inherit;text-decoration:none}
+  /* 打印版专用 */
+  .pr-head{display:flex;align-items:flex-end;gap:12px;border-bottom:2px solid #1A2433;
+    padding-bottom:9px;margin-bottom:14px}
+  .pr-head h1{font-size:19pt;line-height:1.2}
+  .pr-head .prsub{font-size:9.5pt;color:#5C6878;margin-top:3px}
+  .pr-head .prlogo{margin-left:auto;text-align:right;font-size:8.5pt;color:#8A96A6;line-height:1.5}
+  .pr-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0 4px}
+  .pr-kpi{border:1px solid #E3E8EF;border-radius:7px;padding:8px 10px;background:#FAFCFD}
+  .pr-kpi b{display:block;font-size:14pt;color:#1A2433;font-variant-numeric:tabular-nums}
+  .pr-kpi span{display:block;font-size:8.5pt;color:#6C7A8C;margin-top:2px}
+  .pr-sec{margin-top:13px}
+  .pr-sec h3{font-size:11pt;border-left:3px solid #2E86AB;padding-left:8px;margin-bottom:7px}
+  .pr-sec p,.pr-sec li{font-size:9.6pt;line-height:1.62;color:#2B3646}
+  .pr-sec ul{list-style:none}
+  .pr-sec li{padding-left:11px;position:relative}
+  .pr-sec li::before{content:"·";position:absolute;left:2px;color:#8A96A6;font-weight:700}
+  .pr-foot{margin-top:16px;padding-top:9px;border-top:1px solid #D8DEE6;
+    font-size:8.2pt;color:#7A8798;line-height:1.65}
+  .pr-sign{display:flex;justify-content:space-between;margin-top:12px;
+    font-size:8.5pt;color:#8A96A6}
+  .prbadge{display:inline-block;font-size:10pt;font-weight:700;border-radius:5px;
+    padding:3px 11px;color:#fff;border:1px solid transparent}
+  .prtable{width:100%;border-collapse:collapse;font-size:9.3pt;margin-top:6px}
+  .prtable th,.prtable td{border:1px solid #DDE3EA;padding:5px 7px;text-align:center}
+  .prtable th{background:#F3F6F9;color:#5C6878;font-weight:600;font-size:8.8pt}
+  .prtable td.l{text-align:left;color:#5C6878}
+  .prpbar{height:7px;border-radius:4px;background:#E7ECF1;position:relative;overflow:hidden}
+  .prpbar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:#2E86AB}
 }
 </style>
 </head>
@@ -423,15 +676,23 @@ footer b{color:var(--muted);font-weight:600}
     <nav>
       <button class="tab on" data-k="overview">总观</button>
       <button class="tab enterprise" data-k="firm">企业</button>
+      <button class="tab meta" id="mopen">方法与数据</button>
     </nav>
   </div>
 </header>
 
 <main id="main"></main>
 
+<div class="mdrawer" id="drawer"></div>
+
+<!-- 打印区：点「导出 PDF」时把体检报告渲染到这里，@media print 只输出这一块 -->
+<div id="printarea"></div>
+
 <footer>
-  数据源：A 股上市公司 2015–2024 年报分部披露 ＋ CSMAR 财务与治理数据 · 全样本 41,718 个企业·年 / 5,474 家企业 ·
-  指标口径与模型说明见《A股出海质量实证评估与风险预警 · 分析报告》。
+  <b>A股出海质量图谱</b> · 赛道四「行业发展与企业经营数据分析」 ·
+  数据源：A 股上市公司 2015–2024 年报分部披露 ＋ CSMAR 财务与治理数据 ·
+  全样本 41,718 个企业·年 / 5,474 家企业 ·
+  <a href="#" id="mopen2" style="color:var(--blue);text-decoration:none;border-bottom:1px dotted #9CC5D8">方法与数据说明</a>
 </footer>
 
 <script src="app_data.js"></script>
