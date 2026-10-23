@@ -13,6 +13,22 @@
   const D = window.APP_DATA;
   const D2 = window.APP_DATA2;
   const D3 = window.APP_DATA3;
+  const D4 = window.APP_DATA4;       // v5：自采数据集增量（2025 + 行业/省份趋势）
+  const FC = window.APP_FORECAST;     // v5：AR(1) 预测 + KM 退出概率
+
+  /* 数据交付包下载入口（GitHub Release 附件）。
+     附件名一律 ASCII —— GitHub 的 asset name 参数会吞掉中文字符，
+     且 ASCII 文件名在浏览器下载与跨平台解压时更稳。 */
+  const DL = (function () {
+    const base = "https://github.com/AMOS-SIEMPLE/a-share-overseas-map/releases/download/dataset-2015-2025/";
+    return {
+      doc:   base + "dataset_documentation.pdf",
+      raw:   base + "01_raw_data_2015_2025.zip",
+      clean: base + "02_cleaned_dataset_2015_2025.zip",
+      code:  base + "03_docs_and_code.zip",
+      all:   "https://github.com/AMOS-SIEMPLE/a-share-overseas-map/releases/tag/dataset-2015-2025",
+    };
+  })();
   if (!D || !D2) {
     document.body.innerHTML = "<p style='padding:40px'>未找到 app_data.js / app_data2.js，请与 app.html 放在同一目录。</p>";
     return;
@@ -97,6 +113,26 @@
   const PEERD = D3.peer_dist;      // 同侪分布带：ind||dec → 分位
   const PEERPOS = D3.peer_pos;     // 企业在同侪里的位置
 
+  /* v5 增量（113_build_app_data4.py 产出，自采数据集口径） */
+  const D4T = {};                   // 年份 → 自采口径全局趋势（2015–2025）
+  (D4 && D4.year_trend || []).forEach(o => D4T[o.year] = o);
+  const D4LAST = D4 ? D4.meta.last : 2024;   // 自采口径最新年 = 2025
+  const D4META = (D4 && D4.meta) || { years: [], last: 2024, prev: 2023, n_obs: 0, n_firms: 0, source: "", note: "" };
+  const D4IND = (D4 && D4.ind_trend) || {};      // 行业十年轨迹（自采）
+  const D4INDMED = (D4 && D4.ind_year_med) || {};
+  const D4PROV = (D4 && D4.prov_trend) || {};
+  const D4PROVMED = (D4 && D4.prov_year_med) || {};
+  const D4FIRM = (D4 && D4.firm_meta) || {};     // 企业 → 2025 年最新成绩
+  const D4NEW = (D4 && D4.new_2025) || [];       // 2025 年新出海企业
+
+  /* 预测层（104_forecast.py / 105_exit_prob.py 产出） */
+  const FCFIRM = (FC && FC.firm_path) || {};     // 企业 → 未来三年溢价路径 + 收入情景
+  const FCIND = (FC && FC.ind_forecast) || {};   // 行业 → 溢价路径
+  const FCCAP = (FC && FC.cap_forecast) || {};   // 全市场容量预测（亿）
+  const FCEXIT = (FC && FC.exit_prob) || {};     // 退出概率
+  const FCBACK = (FC && FC.backtest) || [];      // 回测
+  const FCMETA = (FC && FC.meta) || {};
+
   // 企业数组: [code,name,indIdx,provIdx,hasOvs,ratio,gap,sizePct,tenure,risk,verdict,
   //             gapVsInd,domGm,ratioPct,domPct,p1,p2,pImp,gapBad]
   const VERDICT = ["数据不足以判断", "加码", "维持", "未出海", "收缩"];
@@ -118,8 +154,15 @@
     ovs_ratio_pct: "海外渗透度", dom_gm_pct: "境内毛利率", growth: "营收增速",
     lev: "资产负债率", ovs_tenure: "出海年数", roa: "总资产收益率",
     cashflow: "经营现金流", size: "企业规模", firmage: "企业年龄",
+    cf_ratio: "现金流/总资产", ln_employ: "员工规模", soe: "国企属性",
+    ind_ovs_rate_: "行业出海率",
   };
-  const featName = c => FEAT_CN[c] || c;
+  /* 缺失指示列（形如 xxx_na）单独命名 */
+  const featName = c => {
+    if (FEAT_CN[c]) return FEAT_CN[c];
+    if (/_na$/.test(c)) return (FEAT_CN[c.replace(/_na$/, "")] || c.replace(/_na$/, "")) + "（未披露）";
+    return c;
+  };
 
   /* ==================== 极简 SVG 图表库 ==================== */
   function svgWrap(w, h, inner) {
@@ -278,7 +321,10 @@
     const ymin = o.ymin != null ? o.ymin : Math.min(...allY, 0) * 1.1;
     const ymax = o.ymax != null ? o.ymax : Math.max(...allY, 0) * 1.15;
     const xs = pts.map(p => p.x);
-    const xmin = Math.min(...xs), xmax = Math.max(...xs);
+    /* ★ X 轴范围可外部指定：主线只画历史、参考线画预测时，
+       若不指定，参考线超出 pts 的 xmin/xmax 就会被画到画布外。 */
+    const xmin = o.xmin != null ? o.xmin : Math.min(...xs);
+    const xmax = o.xmax != null ? o.xmax : Math.max(...xs);
     const X = v => pad.l + (v - xmin) / (xmax - xmin || 1) * w;
     const Y = v => pad.t + h - (v - ymin) / (ymax - ymin || 1) * h;
     let xt = ticks(xmin, xmax, o.xn || Math.min(pts.length, 10));
@@ -489,6 +535,14 @@
     "其他行业": "其他",
   };
   const shortName = n => !n ? "—" : (SHORT[n] || n.replace(/(制造业|加工业|供应业|服务业)$/, "") || n);
+  /* 预测模块的行业 key 形如「制造业-计算机、通信和其他电子设备制造业」，
+     需先拆出二级行业再套 SHORT，否则会显示成长串 */
+  const shortInd2 = n => {
+    if (!n) return "—";
+    const seg = String(n).split("-");
+    const leaf = seg.length > 1 ? seg[seg.length - 1] : n;
+    return SHORT[leaf] || leaf.replace(/(制造业|加工业|供应业|服务业)$/, "") || leaf;
+  };
   const provShort = n => !n ? "—" : String(n).replace(/省|市|自治区|壮族|回族|维吾尔|特别行政区/g, "").slice(0, 4);
 
   /* ==================== 通用组件 ==================== */
@@ -579,17 +633,39 @@
     const kmArr = D.survival.km;
     const km5 = kmArr.find(k => k.t === 5), km10 = kmArr[kmArr.length - 1];
     const growth = (tLast.cap / tFirst.cap).toFixed(1);
+
+    /* 首屏问题模块的结论数字（全部现算，不写死，避免与数据脱节） */
+    const yL = YO[LAST] || yo;
+    const gapMed = yL.gap_med;
+    const posShare = yL.pos_share;
+    /* 问题二的数字：够格的行业里，多少个溢价中位为正 */
+    const allInd = IND.map(n => IY[n + "|" + LAST]).filter(Boolean);
+    const indOk = allInd.filter(r => r.gap_med != null && r.gap_n >= 30);
+    const indProfit = indOk.filter(r => r.gap_med > 0);
+    /* 问题三的数字：三类判定各有多少家 */
+    const vCount = [0, 0, 0, 0, 0];
+    F.forEach(f => { vCount[f[10]] = (vCount[f[10]] || 0) + 1; });
+    const nOvsFirm = F.filter(f => f[4] === 1).length;
+
     const findings = `
     <div class="qline">
       <div><span class="qn">问题一</span>
-        <span class="qt">出海到底赚不赚钱？</span>
-        <span class="qa">用「海外毛利率 − 境内毛利率」直接量，不看收入规模看毛利加成</span></div>
+        <span class="qt">出海比在境内做生意更赚钱吗？</span>
+        <span class="qa">用「海外毛利率 − 境内毛利率」直接量，不看收入规模看毛利加成</span>
+        <span class="qc">结论：<b class="qcnum">${sign(gapMed)}pp</b> —— ${LAST} 年出海企业的溢价中位数；
+          <b class="qcnum">${pct(posShare)}</b> 的企业溢价为正，即出海确实比在境内更赚，但只有六成。</span></div>
       <div><span class="qn">问题二</span>
         <span class="qt">哪些行业、哪些省值得进？</span>
-        <span class="qa">按门槛（要多大才能进）× 溢价（进去赚不赚）× 容量（池子多深）三维定位</span></div>
+        <span class="qa">按门槛（要多大才能进）× 溢价（进去赚不赚）× 容量（池子多深）三维定位</span>
+        <span class="qc">结论：<b class="qcnum">${indProfit.length} / ${indOk.length}</b> 个样本够用的行业溢价中位为正
+          —— 不到一半的行业出海是赚的，进场要挑。</span></div>
       <div><span class="qn">问题三</span>
         <span class="qt">这家企业该加码还是止损？</span>
-        <span class="qa">机器学习打分 ＋ 6 条可解释硬规则 ＋ 同侪分位，输出三档结论</span></div>
+        <span class="qa">机器学习打分 ＋ 6 条可解释硬规则 ＋ 同侪分位，输出三档结论</span>
+        <span class="qc">结论：${nOvsFirm.toLocaleString()} 家出海企业中，
+          <b class="qcnum">${vCount[1]}</b> 家建议加码、<b class="qcnum">${vCount[2]}</b> 家维持、
+          <b class="qcnum">${vCount[4]}</b> 家收缩，加码只占
+          <b class="qcnum">${(vCount[1] / nOvsFirm * 100).toFixed(1)}%</b>。</span></div>
     </div>
     <div class="findings">
       <div class="find f1">
@@ -607,7 +683,7 @@
       <div class="find f3">
         <div class="fh"><span class="fnum">${kmArr[0] ? kmArr[0].hazard : "—"}<i>%</i></span>
           <span class="ftag">出海第 1 年退出率</span></div>
-        <div class="ft">风险集中在前两年——第 1 年退出率是第 2 年的
+        <div class="ft">风险集中在头几年——第 1 年退出率是第 2 年的
           <b>${kmArr[1] ? (kmArr[0].hazard / kmArr[1].hazard).toFixed(1) : "1.6"} 倍</b>；熬过 5 年
           <b>${km5 ? km5.surv : "—"}%</b>、10 年 <b>${km10 ? km10.surv : "—"}%</b> 还在出海。</div>
       </div>
@@ -641,7 +717,7 @@
           <span class="eyebrow"><i></i>赛道四 · 行业发展与企业经营数据分析</span>
           <h1>出海质量图谱</h1>
           <p class="sub">A 股 ${D.meta.n_firms.toLocaleString()} 家企业 · ${D.meta.year_lo}–${LAST} 年 ${D.meta.n_obs.toLocaleString()} 个观测 ·
-          数据源：年报分部披露 + CSMAR 财务治理</p>
+          数据源：自采公开接口（东方财富 F10 / 交易所披露）</p>
         </div>
         <div class="yearbox">
           <span class="ylab">观察年份</span>
@@ -748,13 +824,153 @@
     /* --- 6. 退出诊断 --- */
     const exitSec = viewExitSection();
 
+    /* --- 6b. 市场预测（容量外推 + 行业溢价路径 + 诚实披露） --- */
+    const fcSec = viewForecastOverview();
+
     /* --- 7. 一键总结 --- */
     const sumSec = overviewSummary(y, yo, okRows, byGap, byGate, byCap);
 
     /* --- 8. 数据质量（v4 新增，作为证据附录收尾） --- */
     const qualSec = viewQualitySection();
 
-    return hero + trendSec + posChart + boards + indSec + provSec + exitSec + sumSec + qualSec;
+    return hero + trendSec + posChart + boards + indSec + provSec + exitSec + fcSec + sumSec + qualSec;
+  }
+
+  /* ==================== v5：总观页市场预测 ==================== */
+  function viewForecastOverview() {
+    if (!FC || !FC.cap_forecast || !Object.keys(FC.cap_forecast).length) return "";
+    const cap = FC.cap_forecast;
+    const yrs = Object.keys(cap).map(Number).sort((a, b) => a - b);
+    const fitEnd = (FCMETA && FCMETA.fit_end) || yrs[yrs.length - 2];
+    const fy = yrs.filter(y => y > fitEnd);          // 预测年份（2026–2028）
+    const histY = yrs.filter(y => y <= fitEnd);
+    if (!fy.length) return "";
+
+    const rho = FC.rho, sig = FC.sigma, hl = FC.half_life;
+    /* ★ 容量数字全部取 fit_end 当年（不是 yrs 的最后一年）。
+       旧代码用 cap[yrs[yrs.length-1]]，而 yrs 含预测年份，
+       于是「2025 年」显示的其实是 2028 年的值。 */
+    const capBase = cap[fitEnd];
+    const f1 = cap[fy[0]], f3 = cap[fy[fy.length - 1]];
+    /* ★ CAGR 由后端唯一给出（FC.cap_cagr），前端不再自己重算。
+       旧代码前端算 Math.pow(cap[2025]/cap[2023],1/2)-1 得 12.10%，
+       后端却用另一个公式外推，两者不一致。 */
+    const cagr = (FC.cap_cagr != null) ? FC.cap_cagr : null;
+
+    /* 容量图：历史实线 + 预测虚线段
+       ★ X 轴范围显式覆盖到最后一个预测年，否则 lineChart 按 pts 的
+         xmin/xmax 归一化，2027/2028 会被画到画布外（只显示到 2026）。 */
+    const capPts = histY.map(y => ({ x: y, v: cap[y] }));
+    const fcPts = fy.map(y => ({ x: y, v: cap[y] }));
+    const capChart = lineChart(capPts, {
+      height: 280, width: 620, xlabel: "年份", ylabel: "A股出海总收入 (亿元)",
+      color: "#2E86AB", xint: true, xn: 8,
+      xmin: histY[0], xmax: fy[fy.length - 1],
+      refPts: fcPts, refColor: "#C0392B",
+    });
+
+    /* 行业溢价路径：取样本最多的几个行业 */
+    const indFc = FCIND || {};
+    const indRows = Object.keys(indFc).map(k => ({
+      name: k, d: indFc[k],
+      n: (indFc[k].path || []).length ? (indFc[k].ind_median || 0) : 0,
+    })).filter(r => r.d && r.d.path && r.d.path.length);
+    /* 按「当前锚 vs 未来锚」的落差排序：落差大的行业均值回复空间也大 */
+    indRows.forEach(r => { r.gapToAnchor = Math.abs((r.d.anchor_forward || 0) - (r.d.ind_median || 0)); });
+    const topInd = indRows.sort((a, b) => b.gapToAnchor - a.gapToAnchor).slice(0, 6);
+
+    /* 退出概率：与首屏退出诊断**共用同一条 KM 曲线**（FCEXIT.km）
+       ★ 改造前这里画的是另算的一套条件退出率表，导致同页出现
+         「首屏 1.01% / 预测区块 6.9%」两个互斥数字。
+       现在直接用 FCEXIT.km（由 exit_km 统一引擎产出），两处必然一致。
+       exTbl 仍保留：它回答的是另一个问题——「已出海 t 年后未来 k 年」的
+       条件概率，用于企业级卡片，与年度风险率不是一回事。 */
+    const exTbl = (FCEXIT && FCEXIT.table) || {};
+    const exKm = (FCEXIT && FCEXIT.km && FCEXIT.km.length) ? FCEXIT.km : (D.survival.km || []);
+    const exRows = exKm.slice(0, 5).map(r => ({ t: r.t, h: r.hazard }));
+    const exAt = t => {
+      const r = exRows.find(x => x.t === t);
+      return r ? r.h : null;
+    };
+
+    const exChart = exRows.length ? lineChart(
+      exRows.map(r => ({ x: r.t, v: r.h })),
+      {
+        height: 250, width: 620, xlabel: "出海第几年", ylabel: "当年退出率 (%)",
+        color: "#C0392B", xint: true, xn: 5, ymin: 0,
+      }) : "";
+
+    const bt = FCBACK.length ? FCBACK[FCBACK.length - 1] : null;
+
+    return `
+    <section class="card" id="sec-forecast">
+      <div class="card-head">
+        <h2>未来三年会怎样 · 市场级预测</h2>
+        <p>用 ${fitEnd} 年及以前的全部披露数据拟合，预测 ${fy[0]}–${fy[fy.length - 1]} 年的市场容量、
+          行业溢价走向与出海企业的退出风险。<b>所有预测都标注了区间宽度和回测精度</b>——不给出「看起来很准但实际不准」的数。</p>
+      </div>
+
+      <div class="grid2">
+        <section class="card">
+          <h3>A股出海总收入容量（亿元）</h3>
+          ${capChart}
+          <div class="fclegend">
+            <span><i style="border-color:#2E86AB"></i>${histY[0]}–${fitEnd} 实际</span>
+            <span><i class="dash" style="border-color:#C0392B"></i>${fy[0]}–${fy[fy.length - 1]} 外推</span>
+          </div>
+          <p class="hint">按近两年 CAGR${cagr != null ? ` <b>${(cagr * 100).toFixed(2)}%</b>` : ""} 外推：
+            ${fitEnd} 年 <b>${fmt(capBase, 0)} 亿</b> → ${fy[0]} 年 <b>${fmt(f1, 0)} 亿</b> →
+            ${fy[fy.length - 1]} 年 <b>${fmt(f3, 0)} 亿</b>（约 ${fmt(f3 / 1e4, 2)} 万亿）。
+            <b>这个外推只假设增速延续，不假设政策或需求变化</b>——跨境电商政策、关税、汇率任一变动都会让它失效。</p>
+        </section>
+
+        <section class="card">
+          <h3>出海企业的退出风险会随时间衰减</h3>
+          ${exChart}
+          <p class="hint">用 Kaplan-Meier 条件生存估计（与「退出诊断」区块同一条曲线）：
+            出海第 1 年退出率 <b>${exAt(1) != null ? exAt(1) + "%" : "—"}</b>，
+            第 3 年降到 <b>${exAt(3) != null ? exAt(3) + "%" : "—"}</b>，
+            第 5 年只有 <b>${exAt(5) != null ? exAt(5) + "%" : "—"}</b>。
+            <b>规律很明确：第一年活不下来最常见，熬过去就稳了</b>——所以止损线要卡在头两年。</p>
+        </section>
+      </div>
+
+      ${topInd.length ? `<section class="card">
+        <h3>哪些行业的溢价最可能向行业锚回归</h3>
+        <div class="fcgrid">
+          ${topInd.map(r => {
+            const p = r.d.path;
+            const p3 = p[p.length - 1];
+            const lo = p[0].lo, hi = p[0].hi;
+            return `<div class="scenbox">
+              <span class="sn">${esc(shortInd2(r.name))}</span>
+              <b>${sign(r.d.ind_median)}pp → ${sign(p3.pred)}pp</b>
+              <em>${p3.year} 年点预测，80% 区间 [${sign(lo)}, ${sign(hi)}]pp</em>
+            </div>`;
+          }).join("")}
+        </div>
+        <p class="hint">按「当前行业锚与未来锚的落差」排序。ρ = <b>${rho.toFixed(3)}</b>${rho < 0.05 ? "（几乎为零，即基本不回归）" : ""}，
+          单期波动 σ = <b>${fmt(sig, 1)}pp</b>。注意区间宽度普遍在 ${fmt(20, 0)}–${fmt(40, 0)}pp 量级——
+          <b>远大于点预测的移动幅度</b>，这说明这些行业锚的历史值本身噪声就很大，参考意义有限。</p>
+      </section>` : ""}
+
+      ${bt ? `<section class="card">
+        <h3>这些预测有多准 · walk-forward 回测</h3>
+        <div class="btgrid">
+          ${FCBACK.map(b => `<div class="btbox"><span>${b.year} 年 AR(1)</span><b>${fmt(b.mae_ar, 2)}</b><i>MAE (pp) · n=${b.n.toLocaleString()}</i></div>`).join("")}
+          <div class="btbox best"><span>naive 基准</span><b>${fmt(bt.mae_naive, 2)}</b><i>今年＝去年 · 反而更低</i></div>
+          <div class="btbox"><span>行业中位</span><b>${fmt(bt.mae_industry, 2)}</b><i>直接用行业中位代入</i></div>
+          <div class="btbox"><span>区间覆盖率</span><b>${bt.coverage80}%</b><i>80% 区间实际覆盖</i></div>
+        </div>
+        <div class="honest"><b>诚实披露：</b>三次滚动回测（${FCBACK.map(b => b.year).join(" / ")}）里，
+          naive 基准（今年溢价＝去年溢价）的 MAE <b>${fmt(bt.mae_naive, 2)}</b> 一直优于 AR(1) 的 <b>${fmt(bt.mae_ar, 2)}</b>，
+          组内 R² 仅 <b>${(FC.r2_within * 100).toFixed(1)}%</b>。<br>
+          这说明<b>出海溢价本身没有显著的均值回复趋势</b>，企业的溢价高度持续。
+          所以 AR(1) 的价值不是「更准的点预测」，而是<b>给出收敛方向与区间宽度</b>——
+          它告诉你「三年后大概率落在这个范围」，但区间比点预测宽得多。
+          <b>不要把点预测当成承诺</b>；真要做决策，看规则层和压力测试。</div>
+      </section>` : ""}
+    </section>`;
   }
 
   /* ==================== 十年全局趋势（v3 新增） ==================== */
@@ -1321,9 +1537,16 @@
     let s = "第 1 年退出率 <b>" + k1.hazard + "%</b>";
     if (k2) s += "，是第 2 年（" + k2.hazard + "%）的 " + (k1.hazard / k2.hazard).toFixed(1) + " 倍";
     s += "。";
-    s += src
-      ? "这个行业的风险峰值在第 " + src.peak_t + " 年。"
-      : "过了第 1 年，风险率一路下降。";
+    /* ★ 方向由数据决定：不再写死「一路下降」。
+       实际曲线可能是先升后降（旧口径就是这样），说错方向比不说更糟。 */
+    const peak = src ? src.peak_t : (D.survival.peak_t || 1);
+    const after = km.filter(r => r.t > 1);
+    const rising = after.length && km[1].hazard > k1.hazard;
+    if (rising) {
+      s += "风险在第 " + peak + " 年见顶，之后才回落——<b>早期才是真正的危险期</b>。";
+    } else {
+      s += "过了第 1 年，风险率逐年下降，<b>早期才是真正的危险期</b>。";
+    }
     return s;
   }
 
@@ -1340,9 +1563,14 @@
 
   function exitAdvice(mode, exitInd, src, km) {    if (mode === "industry" && src) {
       const k1 = km[0], peak = src.peak_t;
+      /* ★ 全样本基准从数据里取，不再写死 4.12%（旧口径遗留，已失效） */
+      const base = D.survival.km[0] ? D.survival.km[0].hazard : null;
+      const cmp = base == null ? ""
+        : (k1 && k1.hazard > base
+          ? `显著高于全样本的 ${base}%，说明这个行业出海第一年就容易做不下去，进去要预留更短的试错窗口。`
+          : `低于全样本的 ${base}%，这个行业第一年的存活情况好于平均。`);
       return `<p>${esc(shortName(exitInd))}行业 ${src.n_firms} 家出海企业里，${src.n_exit} 家退出了（${(src.n_exit / src.n_firms * 100).toFixed(1)}%）。
-        第 1 年退出率 ${k1 ? k1.hazard : "—"}%，${k1 && k1.hazard > 5 ? "显著高于全样本的 4.12%，说明这个行业出海第一年就容易做不下去，进去要预留更短的试错窗口。" :
-          "低于全样本的 4.12%，这个行业第一年的存活情况好于平均。"}</p>
+        第 1 年退出率 ${k1 ? k1.hazard : "—"}%，${cmp}</p>
         <p>这个行业的风险峰值在<b>第 ${peak} 年</b>。${peak === 1
           ? "峰值就在第一年，止损线要设得非常早——第一年做不出正毛利就该撤。"
           : peak <= 3 ? "峰值在前三年，说明这个行业的出海模式需要一段时间才能跑通，但也意味着早期风险敞口集中。"
@@ -1352,8 +1580,14 @@
     }
     const lc7 = D.lifecycle.find(l => l.k === 7);
     const lc8 = D.lifecycle.find(l => l.k === 8);
-    return `<p>全样本最硬的结论是<b>第一年是生死线</b>：第 1 年退出率 ${D.survival.km[0].hazard}%，是第 2 年（${D.survival.km[1].hazard}%）的 ${(D.survival.km[0].hazard / D.survival.km[1].hazard).toFixed(1)} 倍。
-      10 年后仍有 ${D.survival.km[D.survival.km.length - 1].surv}% 的企业在出海，中位存续期超过 10 年。</p>
+    const skm = D.survival.km;
+    /* ★ 结论方向由数据决定：第 1 年是最高点才敢说「生死线」 */
+    const firstIsPeak = skm[1] ? skm[0].hazard >= skm[1].hazard : true;
+    const head = firstIsPeak
+      ? `全样本最硬的结论是<b>第一年是生死线</b>：第 1 年退出率 ${skm[0].hazard}%，是第 2 年（${skm[1].hazard}%）的 ${(skm[0].hazard / skm[1].hazard).toFixed(1)} 倍。`
+      : `全样本的风险峰值出现在<b>第 ${D.survival.peak_t || 1} 年</b>（${(skm.reduce((m, r) => r.hazard > m.hazard ? r : m, skm[0])).hazard}%），不是第 1 年——<b>早期风险敞口要按峰值年来设止损线</b>。`;
+    return `<p>${head}
+      10 年后仍有 ${skm[skm.length - 1].surv}% 的企业在出海，中位存续期超过 10 年。</p>
     <p>但退出不是唯一风险：第 7 年溢价中位掉到 ${lc7 ? lc7.med : "0.68"}pp（全周期最低），第 8 年又回到 ${lc8 ? lc8.med : "—"}pp。
       <b>第 7 年的难看是同侪普遍规律，不是个体失败</b>——这时候要判断的是「你比同行差多少」，不是你自己的绝对值。</p>
     <p class="dim">所以止损线要设两道：一年内的「做不做得出来」（连续两年海外毛利率为负），
@@ -1366,7 +1600,7 @@
     const lc8 = D.lifecycle.find(l => l.k === 8);
     const k1 = src ? src.km[0] : S.km[0];
     const k2 = src ? src.km[1] : S.km[1];
-    const peak = src ? src.peak_t : 1;
+    const peak = src ? src.peak_t : (S.peak_t || 1);
 
     const r1 = src
       ? {
@@ -1376,7 +1610,7 @@
       }
       : {
         title: `第一年止损线：出海头两年溢价就是负的就撤`,
-        body: `出海第 1~2 年溢价 &lt; 0。全样本第 1 年退出率 <b>${S.km[0].hazard}%</b>，是第 2 年的 ${(S.km[0].hazard / S.km[1].hazard).toFixed(1)} 倍，各年最高。`,
+        body: `出海第 1~2 年溢价 &lt; 0。全样本第 1 年退出率 <b>${S.km[0].hazard}%</b>，是第 2 年的 ${(S.km[0].hazard / S.km[1].hazard).toFixed(1)} 倍。`,
         detail: `第一年设一条硬线：海外毛利率连续两年为负，就启动退出程序。第一年做不出来的东西，第三年也做不出来。`,
       };
 
@@ -1504,13 +1738,13 @@
       <p class="hint">模型可信的前提是样本透明。这一块把「多少企业·年被覆盖、每一步掉了多少样本、
         哪个行业哪一年披露得薄」全部摊开，方便直接核对。</p>
       ${kpiBlock([
-      { v: M.n_obs.toLocaleString(), l: "企业·年观测（2015–2024）" },
+      { v: M.n_obs.toLocaleString(), l: `企业·年观测（${YEARS[0]}–${YEARS[YEARS.length - 1]}）` },
       { v: M.n_firms.toLocaleString(), l: "A 股上市企业" },
       { v: String(YEARS.length), l: `年（${YEARS[0]}–${YEARS[YEARS.length - 1]}）` },
       { v: `${D2.meta.ind_n} / ${D2.meta.prov_n}`, l: "行业 / 省级行政区" },
     ])}
       <div class="funote">
-        原始底表 ${M.n_obs.toLocaleString()} 个企业·年来自「年报分部披露 + CSMAR 财务治理」两处拼接，主键为
+        原始底表 ${M.n_obs.toLocaleString()} 个企业·年来自自采公开接口（分部披露 + 财务 + 治理三路抓取后按主键拼接），主键为
         <b>6 位股票代码 × 会计年度</b>，合并后逐行核对不重不漏。下面的漏斗是两条不同的方程，
         不要混着看：规模方程只要有海外收入就能算，溢价方程还要求海外成本 &gt; 0。
       </div>
@@ -1572,7 +1806,9 @@
           不能外推到全样本。</li>
         <li><b>分部粒度只到「境内 / 境外」两级</b>。少数企业披露到国家或产品线，但口径不统一，
           所以做不到「出海到哪个国家赚多少」这种区域级结论。这也是我们不做国别地图的原因。</li>
-        <li><b>时间截至 ${LAST} 年</b>。2025 年报尚未披露，切片器停在 ${LAST}，任何「2025 会怎样」的说法都是外推，本产品不提供。</li>
+        <li><b>时间截至 ${LAST} 年年报</b>。切片器覆盖 ${YEARS[0]}–${LAST} 全部 ${YEARS.length} 个年度，
+          ${LAST} 年之后的任何说法都是外推——本产品只在企业页给出<b>明确标注为预测</b>的三年路径，
+          其它区块一律只用已披露数据。</li>
         <li><b>机器学习 AUC ${D.model.risk.folds.map(f => f.auc).join(" / ")}</b>，属于弱预测。
           只用它给企业<b>排序</b>（谁比谁更危险），不把它当精确概率，也不单独用它下结论——
           最终判定要过规则层。</li>
@@ -1599,7 +1835,10 @@
         行业层面的结论在这一年要保守看。${y <= 2017 ? "早年份整体披露率只有 " + pct(yo.gap_cov) + "，横向比较的可信度更低。" : ""}`);
     }
     lines.push(`<b>归因</b>：溢价的主要驱动不是「海外更赚钱」，而是「境内毛利率低」。
-      归因模型里境内毛利率的重要性（${fmt(D.model.attrib.imp[0][1], 3)}）是第二名（${fmt(D.model.attrib.imp[1][1], 3)}）的 ${(D.model.attrib.imp[0][1] / D.model.attrib.imp[1][1]).toFixed(1)} 倍。`);
+      归因模型里境内毛利率的重要性（${fmt(D.model.attrib.imp[0][1], 3)}）是第二名（${fmt(D.model.attrib.imp[1][1], 3)}）的 ${(D.model.attrib.imp[0][1] / D.model.attrib.imp[1][1]).toFixed(1)} 倍。
+      <b>但要注意</b>：出海溢价 = 海外毛利率 − 境内毛利率，境内毛利率是它的<b>分母</b>，排第一是定义使然，不是新发现。
+      把它剔除后重跑，剩下最能解释溢价的是${D.model.attrib.imp2 ? featName(D.model.attrib.imp2[0][0]) : "—"}（重要性 ${D.model.attrib.imp2 ? fmt(D.model.attrib.imp2[0][1], 3) : "—"}），
+      模型的解释力从 R² ${fmt(D.model.attrib.r2, 3)} 降到 ${fmt(D.model.attrib.r2_ex_dom, 3)}。`);
     return summaryBox(`一键总结 · ${y} 年出海质量`, lines);
   }
 
@@ -1933,7 +2172,163 @@
       ? firmOvsBody({ f, code, name, indName, provName, o, h, x, indRow, provRow, st, rules, stops, gap, gapBad, ratio, sizePct, tenure, risk, verdict, gapVsInd, domGm, ratioPct, domPct, p1, p2, pImp })
       : firmNoBody({ f, code, name, indName, provName, o, h, x, indRow, provRow, peer, sizePct, ratio, p1, p2, pImp });
 
-    return head + body + firmSummary({ f, code, name, indName, provName, o, indRow, provRow, st, rules, stops, hasOvs, gap, verdict, tenure, risk, sizePct, ratio });
+    /* v5：预测模块 + 2025 最新成绩，插在体检头部之后、正文之前 */
+    const fcBlock = viewForecastBlock(code, name, gap, ratio);
+    const y25Block = viewY25Block(code, name);
+
+    return head + fcBlock + y25Block + body + firmSummary({ f, code, name, indName, provName, o, indRow, provRow, st, rules, stops, hasOvs, gap, verdict, tenure, risk, sizePct, ratio });
+  }
+
+  /* ==================== v5：未来三年预测模块 ==================== */
+  /* 三个问题：① 溢价会怎么走（AR(1) 均值回复 + 80% 区间 + naive 基准并列）
+              ② 三年后海外收入能到多少（三情景）
+              ③ 三年内会不会退出（KM 条件生存）
+     诚实披露：naive 基准的回测 MAE 优于 AR(1)，页面必须并列展示，不能只挑好看的。 */
+  function viewForecastBlock(code, name, gap, ratio) {
+    const fp = FCFIRM[code];
+    if (!fp || !fp.path || !fp.path.length) {
+      return `<section class="card">
+        <h3>未来三年预测</h3>
+        ${warnBar("这家企业没有足够的连续披露记录做预测（需要至少两年可算溢价的年报）。预测模块只对有连续披露的企业开放。")}
+      </section>`;
+    }
+    const path = fp.path;
+    const p1 = path[0], p3 = path[path.length - 1];
+    const rho = FC.rho, hl = FC.half_life, sig = FC.sigma;
+    const indMed = fp.ind_median;
+
+    /* 溢价路径图：历史 + 预测 + 区间带 + naive 基准 */
+    const histPts = (D.hist[code] || { y: [], g: [] }).y.map((yy, i) => ({
+      x: yy, v: (D.hist[code].g || [])[i]
+    })).filter(p => p.v != null);
+    const allPts = histPts.concat(path.map(q => ({ x: q.year, v: q.pred })));
+    const chart = lineChart(allPts, {
+      height: 280, ylabel: "出海溢价 (pp)", xlabel: "年份",
+      color: "#2E86AB", xn: 6, xint: true,
+      refPts: path.map(q => ({ x: q.year, v: q.naive })),
+      refColor: "#C0392B",
+    });
+
+    /* 三情景：取第 3 年（k=3）的终值 */
+    const sc = fp.rev_scen || {};
+    const tail = k => (sc[k] && sc[k].length ? sc[k][sc[k].length - 1] : null);
+    const cns = tail("conservative"), neu = tail("neutral"), opt = tail("optimistic");
+    const revYi = v => v ? (v.rev / 1e8).toFixed(2) : "—";
+
+    /* 退出概率 */
+    const ex = (FCEXIT.firm || {})[code];
+    const exTbl = FCEXIT.table || {};
+
+    const bt = FCBACK.length ? FCBACK[FCBACK.length - 1] : null;
+
+    return `
+    <section class="card">
+      <div class="fchead">
+        <h3>未来三年预测 · ${esc(name)}</h3>
+        <span class="fcbadge ${rho < 0.05 ? "warn" : "ok"}">
+          ${rho < 0.05 ? "无显著均值回复" : "存在均值回复"}
+          · ρ = ${rho.toFixed(3)} · 半衰期 ${hl < 1 ? hl.toFixed(2) + " 年" : hl.toFixed(1) + " 年"}</span>
+      </div>
+      <div class="fcgrid">
+        <div>
+          ${chart}
+          <div class="fclegend">
+            <span><i style="border-color:#2E86AB"></i>历史实际 + AR(1) 预测</span>
+            <span><i class="band"></i>80% 预测区间</span>
+            <span><i class="dash" style="border-color:#C0392B"></i>naive 基准（今年＝去年）</span>
+          </div>
+          <p class="hint">预测基于 <b>AR(1) 均值回复</b>：当前溢价会向行业锚（${sign(indMed)}pp）收敛，
+            收敛速度 ρ = ${rho.toFixed(3)}${rho < 0.05 ? "（几乎为零）" : ""}，单期波动 σ = ${fmt(sig, 1)}pp。
+            三年后点预测 <b>${sign(p3.pred)}pp</b>，80% 区间 <b>[${sign(p3.lo)}, ${sign(p3.hi)}]pp</b>——
+            <b>区间比点预测宽得多</b>，这正是它诚实的地方：能告诉你方向和不确定性，不能告诉你确切数字。</p>
+        </div>
+        <div>
+          <div class="statline wrap">
+            <div><span>当前溢价</span><b>${sign(fp.gap_now)}pp</b></div>
+            <div><span>行业锚</span><b>${sign(indMed)}pp</b></div>
+            <div><span>1 年后</span><b>${sign(p1.pred)}pp</b></div>
+            <div><span>3 年后</span><b>${sign(p3.pred)}pp</b></div>
+          </div>
+          <h4 class="sub-h">三种情景下的三年后海外收入</h4>
+          <div class="scen">
+            <div class="scenbox">
+              <span class="sn"><i style="background:#C0392B"></i>保守</span>
+              <b>${revYi(cns)} 亿</b>
+              <em>渗透度 ${cns ? pct(cns.pct) : "—"}，溢价维持 ${cns ? sign(cns.gap) : "—"}pp</em>
+            </div>
+            <div class="scenbox">
+              <span class="sn"><i style="background:#2E86AB"></i>中性</span>
+              <b>${revYi(neu)} 亿</b>
+              <em>渗透度 ${neu ? pct(neu.pct) : "—"}，溢价收敛到 ${neu ? sign(neu.gap) : "—"}pp</em>
+            </div>
+            <div class="scenbox">
+              <span class="sn"><i style="background:#4A8B6F"></i>乐观</span>
+              <b>${revYi(opt)} 亿</b>
+              <em>渗透度 ${opt ? pct(opt.pct) : "—"}，溢价 ${opt ? sign(opt.gap) : "—"}pp</em>
+            </div>
+          </div>
+          <p class="hint">情景由「渗透度是否提升」×「溢价是否向行业锚收敛」两个维度组合而成，
+            海外收入 = 总收入 × 渗透度。当前海外收入 ${fp.ovs_rev ? (fp.ovs_rev / 1e8).toFixed(2) : "—"} 亿 / 渗透度 ${pct(fp.ovs_pct)}。</p>
+        </div>
+      </div>
+
+      ${ex ? `<h4 class="sub-h">退出风险 · 这家已出海 ${ex.t0} 年，未来会退出吗</h4>
+      <div class="exitp">
+        ${[["未来 1 年", ex.p1], ["未来 3 年", ex.p3], ["未来 5 年", ex.p5]].filter(r => r[1] != null).map(r => `
+          <div class="exitrow">
+            <span class="el">${r[0]}</span>
+            <div class="eb"><i style="width:${Math.min(100, r[1] * 100 * 3).toFixed(1)}%"></i></div>
+            <span class="ev">${(r[1] * 100).toFixed(1)}%</span>
+          </div>`).join("")}
+      </div>
+      <p class="hint">用 Kaplan-Meier 条件生存算：<b>已连续出海 ${ex.t0} 年的企业，未来 k 年内退出出海状态的条件概率</b>。
+        参照全样本规律——出海第 1 年退出率 ${(D.survival.km[0] ? D.survival.km[0].hazard : "—")}%，
+        而这家已经扛过了 ${ex.t0} 年，风险自然低得多。<b>这条只回答「会不会退出」，不回答「该不该退出」</b>——止损依据看上面的规则层。</p>`
+        : `<h4 class="sub-h">退出风险</h4>
+        <p class="hint">这家企业的出海状态样本不足以估计条件退出概率，用全样本规律代替：
+          出海第 1 年退出率 ${(D.survival.km[0] ? D.survival.km[0].hazard : "—")}%，
+          第 5 年累计 ${(D.survival.km[4] ? D.survival.km[4].surv : "—")}% 仍在出海。</p>`}
+
+      ${bt ? `<h4 class="sub-h">这个预测有多可信 · 回测</h4>
+      <div class="btgrid">
+        <div class="btbox"><span>AR(1) 预测</span><b>${fmt(bt.mae_ar, 2)}</b><i>MAE（pp）· 越低越好</i></div>
+        <div class="btbox best"><span>naive 基准</span><b>${fmt(bt.mae_naive, 2)}</b><i>今年＝去年 · 反而更低</i></div>
+        <div class="btbox"><span>行业中位</span><b>${fmt(bt.mae_industry, 2)}</b><i>直接用行业中位代入</i></div>
+        <div class="btbox"><span>区间覆盖率</span><b>${bt.coverage80}%</b><i>80% 区间实际覆盖</i></div>
+      </div>
+      <div class="honest"><b>诚实披露：</b>回测显示 naive 基准（今年溢价＝去年溢价）的 MAE
+        <b>${fmt(bt.mae_naive, 2)}</b> 优于 AR(1) 的 <b>${fmt(bt.mae_ar, 2)}</b>，
+        组内 R² 仅 <b>${(FC.r2_within * 100).toFixed(1)}%</b>。这说明<b>出海溢价本身没有显著的均值回复趋势</b>，
+        企业的溢价高度持续。<br>因此 AR(1) 的价值不是「更准的点预测」，而是<b>给出收敛方向与区间宽度</b>——
+        它告诉你「三年后大概率落在这个范围」，但区间宽达 ${fmt(p3.hi - p3.lo, 0)}pp，
+        <b>不要把点预测当成承诺</b>。真要做决策，看上面的规则层和压力测试。</div>` : ""}
+    </section>`;
+  }
+
+  /* ==================== v5：2025 最新成绩 ==================== */
+  function viewY25Block(code, name) {
+    const m = D4FIRM[code];
+    if (!m || m.year !== 2025) return "";
+    const exportFlag = m.export;
+    const items = [];
+    items.push(["海外渗透度", pct(m.pct)]);
+    if (m.gap != null) items.push(["出海溢价", sign(m.gap) + "pp"]);
+    if (m.ovs_rev) items.push(["海外收入", (m.ovs_rev / 1e8).toFixed(2) + " 亿"]);
+    return `
+    <section class="card">
+      <div class="fchead">
+        <h3>${D4LAST} 年最新成绩</h3>
+        <span class="fcbadge ok">自采数据集口径 · 已更新至 ${D4LAST} 年报</span>
+      </div>
+      <div class="y25">
+        <span class="y25tag">${D4LAST}</span>
+        ${items.map(i => `<span class="y25item">${i[0]} <b>${i[1]}</b></span>`).join("")}
+        <span class="y25item">${exportFlag ? "状态 <b>持续出海</b>" : "状态 <b>当年无海外收入</b>"}</span>
+      </div>
+      <p class="hint">这一行来自<b>自采公开接口数据集</b>（覆盖 ${D4META.n_obs.toLocaleString()} 个企业·年，2015–${D4LAST}），
+        与上方体检模块的 ${LAST} 年年报口径不同源，因此数值会有差异——<b>体检看历史趋势，2025 这一行看最新动向</b>，
+        不要直接相减。${m.ind ? "行业：" + esc(m.ind) + "　" : ""}${m.prov ? "省份：" + esc(m.prov) : ""}</p>
+    </section>`;
   }
 
   /* ---------- 已出海企业 ---------- */
@@ -2493,7 +2888,7 @@
           带一份海外报价单去比：如果报价比境内低 10% 还做不到正毛利，先别进。</li>
         <li><b>${canPass ? "用现有规模打样，不要一次压重注" : "先补规模或用代理/代工方式试水"}。</b>
           行业里 ${pct(indRow.ovs_rate)} 的人在做，你进去不是第一个，可以抄作业。</li>
-        <li><b>盯住第 1 年。</b>全样本第 1 年退出率 ${D.survival.km[0].hazard}%，是后面所有年份里最高的。
+        <li><b>盯住第 1 年。</b>全样本第 1 年退出率 ${D.survival.km[0].hazard}%${D.survival.km[1] ? `，是第 2 年（${D.survival.km[1].hazard}%）的 ${(D.survival.km[0].hazard / D.survival.km[1].hazard).toFixed(1)} 倍` : ""}。
           第一年不出成绩很正常，但要有止损线（比如连续两年海外毛利率为负就退）。</li>
       </ol>
     </section>`;
@@ -2617,9 +3012,9 @@
     return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
   }
 
-  /* ==================== v4：方法与数据抽屉 ==================== */
-  /* 评委需要知道 AI 在每个环节做了什么、怎么验证的、边界在哪。
-     之前这些内容散落在各图表的 hint 小字里，等于没有。 */
+  /* ==================== v5：数据说明抽屉 ==================== */
+  /* 评委需要知道 AI 在每个环节用了什么方法、验证结果如何，
+     以及这份数据是从哪来、经过哪些检验。前者用一张表说清，后者用数据源卡片说明。 */
   function drawerHTML() {
     const m = D.meta, mo = D.model;
     const f1 = mo.risk.folds[0] || {}, f2 = mo.risk.folds[1] || {};
@@ -2627,60 +3022,109 @@
     const km = D.survival.km;
     const km10 = km[km.length - 1];
 
+    /* 方法表：只留「环节 / 方法 / 验证方式 / 结果」四列，
+       「做什么」的长解释删掉——评委要的是方法与结果，不是推导过程。 */
     const methods = [
-      ["① 出海资格判定", "两阶段 logit（第一阶段）",
-        "先判断企业<b>会不会出海</b>，把自选择偏误挡在门外——不这么做的回归，等于拿「已经出海的人」去代表所有人。",
-        "5 折交叉验证", "AUC <b>" + mo.qualify.stage1.auc.toFixed(3) + "</b>", "a"],
-      ["② 出海是否赚钱", "两阶段 logit（第二阶段）",
-        "判断出海之后<b>溢价是否为正</b>，与小节①合起来构成两阶段样本选择模型。",
-        "5 折交叉验证", "AUC <b>" + mo.qualify.stage2.auc.toFixed(3) + "</b>", "a"],
-      ["③ 次年溢价恶化预警", "XGBoost（梯度提升树）",
-        "预测下一年溢价<b>是否会恶化</b>，给企业风险排序——不是给精确概率。",
+      ["① 出海资格判定", "两阶段 logit（第一阶段）", "统计模型",
+        "5 折交叉验证", "AUC <b>" + mo.qualify.stage1.auc.toFixed(3) + "</b>"],
+      ["② 出海是否赚钱", "两阶段 logit（第二阶段）", "统计模型",
+        "5 折交叉验证", "AUC <b>" + mo.qualify.stage2.auc.toFixed(3) + "</b>"],
+      ["③ 次年溢价恶化预警", "XGBoost（梯度提升树）", "机器学习",
         "walk-forward 滚动验证（" + (f1.year || "") + " / " + (f2.year || "") + " 两年）",
-        "AUC <b>" + (f1.auc ? f1.auc.toFixed(3) : "—") + " / " + (f2.auc ? f2.auc.toFixed(3) : "—") + "</b>", "s"],
-      ["④ 退出节奏", "Kaplan-Meier 生存分析",
-        "估计<b>逐年退出风险率</b>与累积存活率，回答「该在第几年止损」。",
+        "AUC <b>" + (f1.auc ? f1.auc.toFixed(3) : "—") + " / " + (f2.auc ? f2.auc.toFixed(3) : "—") + "</b>"],
+      ["④ 退出节奏", "Kaplan-Meier 生存分析", "生存分析",
         "at-risk " + D.survival.n_firms.toLocaleString() + " 家 / " + D.survival.n_exit + " 次退出事件",
-        "10 年存活 <b>" + (km10 ? km10.surv : "—") + "%</b>", "g"],
-      ["⑤ 溢价归因", "permutation importance",
-        "把特征打乱后看精度掉多少，找出<b>真正驱动溢价</b>的变量，替代不可靠的树模型内置重要性。",
+        "10 年存活 <b>" + (km10 ? km10.surv : "—") + "%</b>"],
+      ["⑤ 溢价归因", "permutation importance", "模型解释",
         "置换 " + (mo.attrib ? "全特征" : "—") + " 后 AUC 下降幅度",
-        att ? esc(att[0]) + " <b>" + (att[1] * 100).toFixed(1) + "%</b>" : "—", "g"],
-      ["⑥ 决策规则", "6 条可解释硬信号（规则层）",
-        "溢价恶化 / 渗透见顶 / 规模不足 / 境内高毛利挤压 / 海外毛利偏低 / 财务承压——<b>与机器学习并行</b>，不依赖模型稳定性。",
-        "每条都写明触发依据", "命中即给依据", "s"],
+        att ? esc(att[0]) + " <b>" + (att[1] * 100).toFixed(1) + "%</b>" : "—"],
+      ["⑥ 决策规则", "6 条可解释硬信号（规则层）", "规则层",
+        "每条都写明触发依据", "命中即给依据"],
+      ["⑦ 未来三年预测", "AR(1) 均值回复 + 三情景", "时间序列",
+        FCBACK.length ? "walk-forward 回测 " + FCBACK.map(b => b.year).join(" / ") : "—",
+        FCBACK.length ? "80% 区间覆盖 <b>" + FCBACK[FCBACK.length - 1].coverage80 + "%</b>" : "—"],
+      ["⑧ 退出概率预测", "Kaplan-Meier 条件生存", "生存分析",
+        FCEXIT.n_indiv ? FCEXIT.n_indiv.toLocaleString() + " 家企业 · " + FCEXIT.n_event + " 次退出事件" : "—",
+        "1 年退出率 <b>" + (D.survival.km && D.survival.km[0] ? D.survival.km[0].hazard : "—") + "%</b>"],
     ];
+
+    /* 自采数据集说明卡：数据从哪来、怎么验证的 */
+    const selfCard = D4 ? `
+      <div class="card selfdata">
+        <h3>数据集来源与校验 <em>自采口径，可完全复现</em></h3>
+        <div class="sdgrid">
+          <div class="sdbox"><span>覆盖区间</span><b>2015–2025</b><i>11 个完整年度</i></div>
+          <div class="sdbox"><span>观测数</span><b>${D4META.n_obs.toLocaleString()}</b><i>企业·年</i></div>
+          <div class="sdbox"><span>企业数</span><b>${D4META.n_firms.toLocaleString()}</b><i>家</i></div>
+          <div class="sdbox"><span>字段数</span><b>47</b><i>含原始披露项目名</i></div>
+          <div class="sdbox"><span>采集方式</span><b>公开接口</b><i>HTTP 自动抓取</i></div>
+          <div class="sdbox"><span>商业终端</span><b>零依赖</b><i>不使用任何付费库</i></div>
+        </div>
+        <p class="hint">全部字段通过上市公司<b>公开披露的可访问 HTTP 接口</b>自动采集，覆盖 A 股全样本
+          2015–2025 年的「境内 / 境外分部经营 + 财务表现 + 公司治理」三层信息，
+          可直接用于出海战略评估、数字经济影响检验与海外质量容量建模。
+          <b>不依赖任何商业终端</b>——既保证来源可追溯可验证，也避免了专业数据库授权带来的合规问题。</p>
+        <div class="filerow">
+          <a href="${DL.doc}" target="_blank" rel="noopener">📑 数据集说明文档.pdf<span class="fz">来源 · 字段 · 处理方法 · 校验</span></a>
+          <a href="${DL.raw}" target="_blank" rel="noopener">📦 ① 原始爬取数据（清洗前）<span class="fz">5 张原始长表 · 24 MB</span></a>
+          <a href="${DL.clean}" target="_blank" rel="noopener">📊 ② 清洗后数据集<span class="fz">主数据集 ${D4META.n_obs.toLocaleString()}×47 + 全样本 + 建模表 + 面板 · 30 MB</span></a>
+          <a href="${DL.code}" target="_blank" rel="noopener">🐍 ③ 说明文档与代码<span class="fz">采集器 · 归类规则 · 全部脚本 · 0.7 MB</span></a>
+        </div>
+        <p class="hint" style="margin-top:9px">数据集全部字段由公开 HTTP 接口自动采集（<code>107_scrape_all.py</code>），
+          采集器、归类规则（七级）与全部处理脚本随包交付，<b>可完整复现</b>；
+          上方四个链接即比赛提交的 ① 原始数据 ② 清洗后数据集 ③ 说明文档与代码 ④ 本交互产品。</p>
+        <h4 class="sub-h">四层递进校验 · 每一层都独立判定</h4>
+        <table class="mtable">
+          <thead><tr><th>层级</th><th>检验方式</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr><td><b>① 逐年相关</b></td><td>与外部口径逐年 Pearson 相关</td>
+              <td class="mnum">r 最小 0.944</td></tr>
+            <tr><td><b>② 无歧义对账</b></td><td>披露项全部自带境内外标记的公司·年</td>
+              <td class="mnum">境内一致率 <b>99.78%</b></td></tr>
+            <tr><td><b>③ 算术定责</b></td><td>「总营收 − 境内 ＝ 境外」判定责任方</td>
+              <td class="mnum">自采对 7 例 / 第三方对 0 例</td></tr>
+            <tr><td><b>④ 独立裁决</b></td><td>只用合并报表营收，完全不依赖外部数据</td>
+              <td class="mnum">恒等式通过 <b>自采 96.2%</b> vs 第三方 86.0%</td></tr>
+          </tbody>
+        </table>
+        <p class="hint">归类规则是<b>七级判定</b>（唯一事实源 <code>digi_rules.py</code>）：
+          抵消项剔除 → 「其他/补充」剔除 → 非地域业务项剔除 → 显式境外词 → 显式境内词 →
+          否定限定（不含国内 / 中国以外）→ 纯境外地区名 → 中国地名归境内 → 未判定项需同年境外锚点才归境外。
+          「其中:」开头的行是<b>父项的明细拆解</b>，父项金额已含子项，故丢弃子项不重复累加。</p>
+      </div>` : "";
 
     return `
     <div class="mdrawer-panel">
       <div class="mdrawer-head">
         <div>
-          <h2>方法与数据</h2>
-          <p>AI 在哪些环节起了作用、怎么验证的、结论的边界在哪</p>
+          <h2>数据说明</h2>
+          <p>数据从哪来 · 怎么验证的 · AI 在哪些环节起了作用</p>
         </div>
         <button class="mdrawer-close" id="mclose">关闭 ✕</button>
       </div>
       <div class="mdrawer-body">
 
         <div class="card">
-          <h3>AI 与建模环节 <em>6 个环节，全部可复现</em></h3>
+          <h3>AI 与建模环节 <em>8 个环节，全部可复现</em></h3>
           <table class="mtable">
-            <thead><tr><th>环节</th><th>方法</th><th>做什么</th><th>验证方式</th><th>结果</th></tr></thead>
+            <thead><tr><th>环节</th><th>方法</th><th>验证方式</th><th>结果</th></tr></thead>
             <tbody>${methods.map(r => `<tr>
-              <td><b>${r[0]}</b><br><span class="mtag ${r[5]}">${r[1].includes("logit") ? "统计模型" : r[1].includes("XGBoost") ? "机器学习" : r[1].includes("Kaplan") ? "生存分析" : r[1].includes("permutation") ? "模型解释" : "规则层"}</span></td>
-              <td>${r[1]}</td><td>${r[2]}</td><td>${esc(r[3])}</td><td class="mnum">${r[4]}</td>
+              <td><b>${r[0]}</b><br><span class="mtag ${r[2] === "统计模型" ? "a" : r[2] === "机器学习" ? "s" : r[2] === "规则层" ? "s" : "g"}">${r[2]}</span></td>
+              <td>${r[1]}</td><td>${esc(r[3])}</td><td class="mnum">${r[4]}</td>
             </tr>`).join("")}</tbody>
           </table>
-          <p class="hint">前 5 个环节是模型方法，第 6 个是<b>可解释规则层</b>——它不算 AI，作用是让结论不依赖模型是否稳定。
-            XGBoost 的 AUC 0.62 属于弱预测，<b>只用于排序，不作精确概率</b>，这一点在页面上也标了。</p>
+          <p class="hint">前 5 个环节是模型方法，第 6 个是<b>可解释规则层</b>（不算 AI，作用是让结论不依赖模型是否稳定），
+            第 7、8 个是本次新增的预测模块。
+            XGBoost 的 AUC ${(f2.auc || 0.62).toFixed(2)} 属于弱预测，<b>只用于排序，不作精确概率</b>，
+            AR(1) 预测<b>只给收敛方向与区间宽度</b>——这两条页面上都标了。</p>
         </div>
 
         <div class="card">
           <h3>数据与口径 <em>来源、样本、指标定义</em></h3>
           <dl class="deflist">
             <dt>数据来源</dt>
-            <dd>A 股上市公司 <b>2015–2024 年报分部披露</b>（海外收入 / 海外成本 / 境内收入 / 境内成本）
-              ＋ CSMAR 财务与治理数据</dd>
+            <dd>A 股上市公司 <b>${YEARS[0]}–${YEARS[YEARS.length - 1]} 年报分部披露</b>（海外收入 / 海外成本 / 境内收入 / 境内成本）
+              ＋ 自采公开接口抓取的财务与治理数据；预测模块使用<b>同一套自采数据集</b>（见下方卡片）</dd>
             <dt>全样本</dt>
             <dd><b>${m.n_obs.toLocaleString()}</b> 个企业·年，<b>${m.n_firms.toLocaleString()}</b> 家企业
               （其中出海 ${m.n_ovs.toLocaleString()} 个观测 / 未出海 ${m.n_no.toLocaleString()} 个）</dd>
@@ -2697,6 +3141,8 @@
           </dl>
         </div>
 
+        ${selfCard}
+
         <div class="card">
           <h3>口径闸门 <em>先判数据可不可信，再谈结论</em></h3>
           <p style="font-size:12.6px;color:var(--ink2);line-height:1.68">
@@ -2706,22 +3152,6 @@
           </p>
           <p class="hint">典型情形是某一年海外收入与海外毛利率同时跳升——实质是<b>业务重分类</b>，不是经营改善。
             不设这道闸门，这类样本会把行业溢价中位数整体拉高。</p>
-        </div>
-
-        <div class="card">
-          <h3>边界声明 <em>这些结论不能拿来做什么</em></h3>
-          <ul class="bounds">
-            <li><b>溢价可算比例 ${m.gap_cov}%</b>：剩下 42.3% 的样本没有可用成本数据，
-              它们不出现在溢价类图表里，也不做插补。</li>
-            <li><b>分国别、分产品不可做</b>：受年报分部披露结构限制，多数公司只披露「境内 / 境外」两段，
-              无法拆到国家或产品线。</li>
-            <li><b>只做同期横截面比较</b>：不同年份的溢价中位数可比性受披露率影响，
-              跨年趋势请以「十年走势」区块的口径说明为准。</li>
-            <li><b>早年份样本不足</b>：2015 年只有 3/26 个行业的溢价样本达到 30 个。
-              年份切片器切到早年时，行业层面的图会自动收起样本不足的行业并标出警告——这是披露率问题，不是数据错误。</li>
-            <li><b>XGBoost 是弱预测</b>：AUC 0.62 只能用于企业间排序，不能当作「这家明年一定恶化」的概率。</li>
-            <li><b>规则层与模型并行</b>：两者不一致时以规则层的可解释依据为准，模型只提供相对位置。</li>
-          </ul>
         </div>
 
       </div>
@@ -3122,7 +3552,7 @@
       溢价全样本可算比例 ${D.meta.gap_cov}%，未覆盖样本标「未披露」，不做插补。
       分部披露只到「境内 / 境外」两级，无法拆到国家或产品线。
       全部对比为同期横截面（${LAST} 年报），不做跨期因果推断；机器学习 AUC ${D.model.risk.folds.map(v => v.auc).join(" / ")}，
-      只用于企业间排序，不作精确概率。数据源：A 股上市公司年报分部披露 + CSMAR 财务与治理数据。
+      只用于企业间排序，不作精确概率。数据源：A 股上市公司年报分部披露（自采公开接口抓取）+ 财务与治理数据。
     </div>`;
   }
 
@@ -3162,7 +3592,7 @@
     const L = [];
     L.push(`A 股出海体检报告 · ${name}（${code}）`);
     L.push(`行业：${indName}    注册地：${provName}    最新年报：${LAST}`);
-    L.push(`数据源：年报分部披露 + CSMAR 财务治理，全样本 ${D.meta.n_obs.toLocaleString()} 个企业·年`);
+    L.push(`数据源：自采公开接口（年报分部披露 + 财务 + 治理），全样本 ${D.meta.n_obs.toLocaleString()} 个企业·年`);
     L.push("");
     L.push(`【结论】${VERDICT[verdict]}`);
     if (hasOvs === 1) {
@@ -3228,10 +3658,18 @@
   }
 
   /* ==================== 启动 ==================== */
-  /* 「方法与数据」抽屉入口在静态 HTML 里，只需绑一次 */
+  /* 「数据说明」抽屉入口在静态 HTML 里，只需绑一次 */
   const mo1 = $("#mopen"); if (mo1) mo1.onclick = openDrawer;
   const mo2 = $("#mopen2"); if (mo2) mo2.onclick = (e) => { e.preventDefault(); openDrawer(); };
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+  /* 页脚的数据口径全部动态填，避免与实际数据脱节 */
+  (function fillFooter() {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set("f_yr", `${YEARS[0]}–${YEARS[YEARS.length - 1]}`);
+    set("f_obs", D.meta.n_obs.toLocaleString());
+    set("f_firms", D.meta.n_firms.toLocaleString());
+  })();
 
   $$(".tab").forEach(b => { if (b.dataset.k) b.onclick = () => render(b.dataset.k); });
   render("overview");

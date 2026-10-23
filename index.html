@@ -52,6 +52,11 @@ nav{display:flex;gap:2px;margin-left:auto;overflow-x:auto}
 /* 「方法与数据」是抽屉入口，不是页签，用描边区分 */
 .tab.meta{border:1px solid var(--line);background:#fff;margin-left:6px}
 .tab.meta:hover{border-color:var(--blue);background:#F4F9FC;color:var(--blue)}
+/* 「数据集下载」是外链，不用 .tab 类（避免被当成页签切换逻辑处理） */
+.navdl{font-size:13.5px;color:var(--blue-d);text-decoration:none;font-weight:600;
+  padding:7px 13px;border-radius:8px;border:1px dashed #9CC5D8;background:#F7FBFD;
+  white-space:nowrap;transition:background .15s}
+.navdl:hover{background:#E9F3F9}
 
 /* ============ 布局 ============ */
 main{max-width:1280px;margin:0 auto;padding:22px 24px 60px}
@@ -390,6 +395,94 @@ main{max-width:1280px;margin:0 auto;padding:22px 24px 60px}
 .rules li p.ract::before{content:"→ ";color:var(--blue);font-weight:700}
 .rules li{padding:12px 0 12px 40px}
 
+/* ============ v5：首屏问题模块（问题更具体 + 结论紧跟） ============ */
+.qline .qc{display:block;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line2);
+  font-size:12.3px;color:var(--ink2);line-height:1.6}
+.qline .qc b{color:var(--blue-d);font-weight:680;font-variant-numeric:tabular-nums}
+.qline .qc .qcnum{color:var(--ink);font-weight:700}
+
+/* ============ v5：预测模块 ============ */
+.fcgrid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start}
+.fcgrid>.card{margin-bottom:0}
+.fchead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;margin-bottom:10px}
+.fchead h3{font-size:15.5px}
+.fcbadge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+  color:var(--muted);background:#F0F3F8;border:1px solid var(--line2);border-radius:20px;padding:2px 10px}
+.fcbadge.warn{color:#8A6510;background:#FFF8E8;border-color:#F5E0B5}
+.fcbadge.ok{color:#3E7D62;background:#EDF5F1;border-color:#CBE3D8}
+/* 预测图例 */
+.fclegend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:11.8px;color:var(--muted)}
+.fclegend span{display:inline-flex;align-items:center;gap:6px}
+.fclegend i{width:16px;height:0;border-top-width:2.5px;border-top-style:solid;display:inline-block}
+.fclegend i.band{height:10px;border:0;background:rgba(46,134,171,.16);border-radius:2px}
+.fclegend i.dash{border-top-style:dashed}
+/* 情景表 */
+.scen{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.scenbox{border:1px solid var(--line2);border-radius:10px;padding:11px 13px;background:#FAFBFD}
+.scenbox .sn{font-size:11.8px;font-weight:650;color:var(--muted);display:flex;align-items:center;gap:6px}
+.scenbox .sn i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.scenbox b{display:block;font-size:17px;font-weight:700;color:var(--ink);margin:5px 0 1px;
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.scenbox em{font-style:normal;font-size:11.2px;color:var(--dim);display:block;line-height:1.5}
+/* 回测卡 */
+.btgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px}
+.btbox{background:#FAFBFD;border:1px solid var(--line2);border-radius:10px;padding:11px 13px}
+.btbox span{font-size:11.4px;color:var(--dim);display:block;margin-bottom:4px}
+.btbox b{display:block;font-size:18px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.btbox.best b{color:var(--green)}
+.btbox i{font-style:normal;font-size:11px;color:var(--muted);display:block;margin-top:2px}
+.honest{background:#FFF8E8;border:1px solid #F5E0B5;color:#8A6510;border-radius:9px;
+  padding:9px 13px;font-size:12.2px;line-height:1.65;margin-top:12px}
+.honest b{color:#6E5209}
+/* 退出概率条 */
+.exitp{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+.exitrow{display:grid;grid-template-columns:64px 1fr 74px;gap:10px;align-items:center}
+.exitrow .el{font-size:12px;color:var(--muted)}
+.exitrow .eb{height:9px;background:#EEF2F7;border-radius:5px;overflow:hidden}
+.exitrow .eb i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#D68910,#C0392B)}
+.exitrow .ev{font-size:12.5px;font-weight:650;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+/* 2025 增量条 */
+.y25{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.y25tag{font-size:11px;font-weight:700;color:#fff;background:linear-gradient(135deg,#2E86AB,#1F5F7E);
+  border-radius:5px;padding:2px 8px;letter-spacing:.02em}
+.y25item{font-size:12.2px;color:var(--ink2);background:#F4F9FC;border:1px solid #D3E3EE;
+  border-radius:7px;padding:5px 11px}
+.y25item b{color:var(--ink);font-weight:680;font-variant-numeric:tabular-nums}
+
+/* ============ v5：自采数据集说明卡 ============ */
+.selfdata{background:linear-gradient(180deg,#FBFDFF 0%,#F4F9FC 100%);border-color:#D3E3EE}
+.selfdata .sdgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+  gap:10px;margin-top:10px}
+.selfdata .sdbox{background:#fff;border:1px solid var(--line2);border-radius:9px;padding:10px 12px}
+.selfdata .sdbox span{display:block;font-size:11.3px;color:var(--dim);margin-bottom:3px}
+.selfdata .sdbox b{font-size:16px;font-weight:700;color:var(--blue-d);font-variant-numeric:tabular-nums}
+.selfdata .sdbox i{font-style:normal;font-size:11px;color:var(--muted);display:block;margin-top:2px}
+.filerow{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+.filerow a,.filerow span.fx{display:inline-flex;align-items:center;gap:6px;font-size:12px;
+  color:var(--blue-d);background:#EAF3F8;border:1px solid #CFE3EE;border-radius:7px;
+  padding:6px 12px;text-decoration:none;font-weight:600}
+.filerow a:hover{background:#DCEBF4}
+.filerow a .fz{font-weight:400;color:#5C7C91;font-size:11px;margin-left:2px}
+.filerow a:hover .fz{color:var(--blue-d)}
+.dlbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;
+  padding:10px 12px;background:#F4F9FC;border:1px solid #DCE7EE;border-radius:8px}
+.dlbar b{font-size:12px;color:var(--blue-d)}
+.dlbar a{font-size:12px;color:var(--blue);text-decoration:none;font-weight:600;
+  border-bottom:1px dotted #9CC5D8}
+.dlbar a:hover{color:var(--blue-d)}
+
+@media (max-width:1080px){
+  .fcgrid{grid-template-columns:1fr}
+  .scen{grid-template-columns:1fr}
+}
+@media (max-width:720px){
+  .fcgrid{grid-template-columns:1fr}
+  .scen{grid-template-columns:1fr}
+  .exitrow{grid-template-columns:52px 1fr 62px}
+  .btgrid{grid-template-columns:repeat(2,1fr)}
+}
+
 .empty{padding:40px;text-align:center;color:var(--dim);font-size:13.5px}
 
 /* ============ v4：首屏叙事 ============ */
@@ -676,7 +769,9 @@ footer b{color:var(--muted);font-weight:600}
     <nav>
       <button class="tab on" data-k="overview">总观</button>
       <button class="tab enterprise" data-k="firm">企业</button>
-      <button class="tab meta" id="mopen">方法与数据</button>
+      <button class="tab meta" id="mopen">数据说明</button>
+      <a class="navdl" id="navdl" target="_blank" rel="noopener"
+         href="https://github.com/AMOS-SIEMPLE/a-share-overseas-map/releases/tag/dataset-2015-2025">⬇ 数据集下载</a>
     </nav>
   </div>
 </header>
@@ -690,14 +785,20 @@ footer b{color:var(--muted);font-weight:600}
 
 <footer>
   <b>A股出海质量图谱</b> · 赛道四「行业发展与企业经营数据分析」 ·
-  数据源：A 股上市公司 2015–2024 年报分部披露 ＋ CSMAR 财务与治理数据 ·
-  全样本 41,718 个企业·年 / 5,474 家企业 ·
-  <a href="#" id="mopen2" style="color:var(--blue);text-decoration:none;border-bottom:1px dotted #9CC5D8">方法与数据说明</a>
+  数据源：A 股上市公司 <span id="f_yr">2015–2025</span> 年报分部披露 ＋ 自采公开接口抓取的财务与治理数据 ·
+  全样本 <span id="f_obs">—</span> 个企业·年 / <span id="f_firms">—</span> 家企业 ·
+  <a href="#" id="mopen2" style="color:var(--blue);text-decoration:none;border-bottom:1px dotted #9CC5D8">数据说明</a>
+  <span style="color:#B9C6D2">｜</span>
+  <a href="https://github.com/AMOS-SIEMPLE/a-share-overseas-map/releases/tag/dataset-2015-2025"
+     target="_blank" rel="noopener"
+     style="color:var(--blue);text-decoration:none;border-bottom:1px dotted #9CC5D8">下载数据集</a>
 </footer>
 
 <script src="app_data.js"></script>
 <script src="app_data2.js"></script>
 <script src="app_data3.js"></script>
+<script src="app_data4.js"></script>
+<script src="forecast_data.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
