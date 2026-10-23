@@ -3044,7 +3044,7 @@
         FCBACK.length ? "walk-forward 回测 " + FCBACK.map(b => b.year).join(" / ") : "—",
         FCBACK.length ? "80% 区间覆盖 <b>" + FCBACK[FCBACK.length - 1].coverage80 + "%</b>" : "—"],
       ["⑧ 退出概率预测", "Kaplan-Meier 条件生存", "生存分析",
-        FCEXIT.n_indiv ? FCEXIT.n_indiv.toLocaleString() + " 家企业 · " + FCEXIT.n_event + " 次退出事件" : "—",
+        FCEXIT.n_indiv ? FCEXIT.n_indiv.toLocaleString() + " 个企业·年观测 · " + FCEXIT.n_event + " 次退出事件" : "—",
         "1 年退出率 <b>" + (D.survival.km && D.survival.km[0] ? D.survival.km[0].hazard : "—") + "%</b>"],
     ];
 
