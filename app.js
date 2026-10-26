@@ -168,6 +168,28 @@
   function svgWrap(w, h, inner) {
     return `<svg viewBox="0 0 ${w} ${h}" class="chart" preserveAspectRatio="xMidYMid meet">${inner}</svg>`;
   }
+  /* 文本宽度估算：中日韩字符按 1em，ASCII 按 0.55em。
+     图表里的标签必须能自己判断「放不放得下」，否则 SVG 会把超界的字裁掉，
+     页面上就出现半截字（旧版「生和社会工作-卫生」就是这么没的）。 */
+  function textW(s, size) {
+    let w = 0;
+    for (const ch of String(s == null ? "" : s)) {
+      w += /[\u2E80-\u9FFF\u3000-\u303F\uFF00-\uFFEF]/.test(ch) ? size : size * 0.56;
+    }
+    return w;
+  }
+  /* 按像素上限截断，超出补省略号 */
+  function clip(s, maxPx, size) {
+    s = String(s == null ? "" : s);
+    if (textW(s, size) <= maxPx) return s;
+    let out = "";
+    for (const ch of s) {
+      if (textW(out + ch + "…", size) > maxPx) break;
+      out += ch;
+    }
+    return (out || s.slice(0, 1)) + "…";
+  }
+
   function txt(x, y, s, opt = {}) {
     /* halo：白描边 + paint-order=stroke，让文字压在虚线/网格线上时依然清晰 */
     const halo = opt.halo
@@ -274,7 +296,8 @@
   }
 
   /* 横向条形图
-     数字看不清是上一版的主要抱怨 → 字号 10→12.5、行高 24→28、数值区 56→76、标签 10.5→11.5 */
+     标签一律先按可用宽度截断再画：SVG 不会自动换行也不会自动缩字号，
+     超出 viewBox 的字会被直接裁掉，页面上只剩半截（旧版最刺眼的问题）。 */
   function hbars(items, o = {}) {
     if (!items.length) return emptyChart(o.emptyMsg || "没有数据");
     const W = o.width || 360, rowH = o.rowH || 28, pad = { l: o.labelW || 118, r: o.valueW || 76, t: 6, b: 6 };
@@ -282,6 +305,8 @@
     const w = W - pad.l - pad.r;
     const max = Math.max(...items.map(i => Math.abs(i.v))) || 1;
     const neg = items.some(i => i.v < 0);
+    const fs = o.labelSize || 11.5;
+    const lab = (it) => clip(it.label, pad.l - 14, fs);
     let g = "";
     if (neg) {
       const zx = pad.l + w / 2;
@@ -290,7 +315,7 @@
         const y = pad.t + i * rowH;
         const bw = Math.max(scale(it.v), 1.5);
         const x0 = it.v >= 0 ? zx : zx - bw;
-        g += txt(pad.l - 8, y + rowH / 2 + 4, it.label, { anchor: "end", size: 11.5, fill: "#3D4859" });
+        g += txt(pad.l - 8, y + rowH / 2 + 4, lab(it), { anchor: "end", size: fs, fill: "#3D4859", halo: 3 });
         g += `<rect x="${x0}" y="${y + 5}" width="${bw}" height="${rowH - 12}" rx="2.5"
           fill="${it.c || "#2E86AB"}" fill-opacity="0.85"><title>${esc(it.label)}: ${it.vt != null ? it.vt : it.v}</title></rect>`;
         g += txt(it.v >= 0 ? x0 + bw + 7 : x0 - 7, y + rowH / 2 + 4.5, it.vt != null ? it.vt : fmt(it.v),
@@ -301,7 +326,7 @@
       items.forEach((it, i) => {
         const y = pad.t + i * rowH;
         const bw = Math.abs(it.v) / max * w;
-        g += txt(pad.l - 8, y + rowH / 2 + 4, it.label, { anchor: "end", size: 11.5, fill: "#3D4859" });
+        g += txt(pad.l - 8, y + rowH / 2 + 4, lab(it), { anchor: "end", size: fs, fill: "#3D4859", halo: 3 });
         g += `<rect x="${pad.l}" y="${y + 5}" width="${Math.max(bw, 1.5)}" height="${rowH - 12}"
           rx="2.5" fill="${it.c || "#2E86AB"}" fill-opacity="0.85"><title>${esc(it.label)}: ${it.vt != null ? it.vt : it.v}</title></rect>`;
         g += txt(pad.l + Math.max(bw, 1.5) + 7, y + rowH / 2 + 4.5, it.vt != null ? it.vt : fmt(it.v),
@@ -505,7 +530,9 @@
     </div>`;
   }
 
-  /* 图表标签用的短名 */
+  /* 图表标签用的短名
+     行业名是「门类-大类」两段结构（如 制造业-计算机、通信和其他电子设备制造业）。
+     图表横排只放得下 5–8 个字，所以先按大类做映射，再统一交给 clip() 兜底截断。 */
   const SHORT = {
     "计算机、通信和其他电子设备制造业": "电子设备",
     "电气机械及器材制造业": "电气机械",
@@ -534,15 +561,107 @@
     "零售业": "零售",
     "其他行业": "其他",
   };
-  const shortName = n => !n ? "—" : (SHORT[n] || n.replace(/(制造业|加工业|供应业|服务业)$/, "") || n);
-  /* 预测模块的行业 key 形如「制造业-计算机、通信和其他电子设备制造业」，
-     需先拆出二级行业再套 SHORT，否则会显示成长串 */
-  const shortInd2 = n => {
-    if (!n) return "—";
-    const seg = String(n).split("-");
-    const leaf = seg.length > 1 ? seg[seg.length - 1] : n;
-    return SHORT[leaf] || leaf.replace(/(制造业|加工业|供应业|服务业)$/, "") || leaf;
+  /* 大类（第二段）→ 短名。84 个行业口径基本都在这里，是图表可读性的关键。 */
+  const LEAF = {
+    "计算机、通信和其他电子设备制造业": "电子设备",
+    "橡胶和塑料制品业": "橡塑",
+    "专用设备制造业": "专用设备",
+    "通用设备制造业": "通用设备",
+    "汽车制造业": "汽车",
+    "电气机械和器材制造业": "电气机械",
+    "化学原料和化学制品制造业": "化学原料",
+    "金属制品业": "金属制品",
+    "仪器仪表制造业": "仪器仪表",
+    "纺织业": "纺织",
+    "化学纤维制造业": "化纤",
+    "造纸和纸制品业": "造纸",
+    "有色金属冶炼和压延加工业": "有色金属",
+    "印刷和记录媒介复制业": "印刷",
+    "文教、工美、体育和娱乐用品制造业": "文教用品",
+    "非金属矿物制品业": "非金属矿物",
+    "铁路、船舶、航空航天和其他运输设备制造业": "运输设备",
+    "其他制造业": "其他制造",
+    "家具制造业": "家具",
+    "农副食品加工业": "农副食品",
+    "纺织服装、服饰业": "纺服",
+    "食品制造业": "食品",
+    "木材加工和木、竹、藤、棕、草制品业": "木材加工",
+    "医药制造业": "医药",
+    "废弃资源综合利用业": "废弃资源",
+    "黑色金属冶炼和压延加工业": "黑色金属",
+    "皮革、毛皮、羽毛及其制品和制鞋业": "皮革制鞋",
+    "金属制品、机械和设备修理业": "设备修理",
+    "酒、饮料和精制茶制造业": "酒饮料",
+    "石油、煤炭及其他燃料加工业": "石油煤炭",
+    "非金属矿采选业": "非金属矿",
+    "石油和天然气开采业": "油气开采",
+    "开采专业及辅助性活动": "采矿辅助",
+    "有色金属矿采选业": "有色矿采",
+    "黑色金属矿采选业": "黑色矿采",
+    "煤炭开采和洗选业": "煤炭开采",
+    "建筑安装业": "建筑安装",
+    "土木工程建筑业": "土木工程",
+    "建筑装饰、装修和其他建筑业": "建筑装饰",
+    "房屋建筑业": "房屋建筑",
+    "装卸搬运和仓储业": "仓储物流",
+    "航空运输业": "航空运输",
+    "多式联运和运输代理业": "多式联运",
+    "水上运输业": "水上运输",
+    "道路运输业": "道路运输",
+    "铁路运输业": "铁路运输",
+    "邮政业": "邮政",
+    "其他金融业": "其他金融",
+    "资本市场服务": "资本市场",
+    "保险业": "保险",
+    "货币金融服务": "货币金融",
+    "批发业": "批发",
+    "零售业": "零售",
+    "软件和信息技术服务业": "软件服务",
+    "互联网和相关服务": "互联网",
+    "电信、广播电视和卫星传输服务": "电信广电",
+    "研究和试验发展": "研发试验",
+    "科技推广和应用服务业": "科技推广",
+    "专业技术服务业": "专业技术",
+    "生态保护和环境治理业": "生态环保",
+    "公共设施管理业": "公共设施",
+    "水利管理业": "水利管理",
+    "燃气生产和供应业": "燃气",
+    "水的生产和供应业": "供水",
+    "电力、热力生产和供应业": "电力热力",
+    "渔业": "渔业",
+    "畜牧业": "畜牧",
+    "农业": "农业",
+    "农、林、牧、渔专业及辅助性活动": "农林牧渔辅助",
+    "林业": "林业",
+    "体育": "体育",
+    "广播、电视、电影和录音制作业": "广电影视",
+    "新闻和出版业": "新闻出版",
+    "文化艺术业": "文化艺术",
+    "商务服务业": "商务服务",
+    "租赁业": "租赁",
+    "卫生": "卫生",
+    "教育": "教育",
+    "住宿业": "住宿",
+    "餐饮业": "餐饮",
+    "机动车、电子产品和日用产品修理业": "修理服务",
+    "房地产业": "房地产",
+    "综合": "综合",
   };
+  const shortName = n => !n ? "—" : (SHORT[n] || n.replace(/(制造业|加工业|供应业|服务业)$/, "") || n);
+  const leafOf = n => {
+    if (!n) return "";
+    const seg = String(n).split("-");
+    return seg.length > 1 ? seg[seg.length - 1] : n;
+  };
+  /* 图表专用短名：先查大类映射，再截断到放得下的宽度（默认 7 个汉字） */
+  const indShort = (n, maxPx) => {
+    if (!n) return "—";
+    const leaf = leafOf(n);
+    const s = LEAF[leaf] || SHORT[leaf] || SHORT[n] || leaf.replace(/(制造业|加工业|供应业|服务业|业)$/, "") || leaf;
+    return clip(s, maxPx == null ? 88 : maxPx, 11.5);
+  };
+  /* 旧名保留：预测模块等处在用 */
+  const shortInd2 = n => indShort(n);
   const provShort = n => !n ? "—" : String(n).replace(/省|市|自治区|壮族|回族|维吾尔|特别行政区/g, "").slice(0, 4);
 
   /* ==================== 通用组件 ==================== */
@@ -620,141 +739,223 @@
     </div>`;
   }
 
-  /* ==================== 视图：总观（单页滚动） ==================== */
+  /* ==================== 视图：总观（单页滚动） ====================
+     页面顺序按「读者先想知道什么」排：
+       ① 这一年怎么样（关键指标 + 同比）
+       ② 一键总结（这一年的重点汇总，放最前）
+       ③ 两个能落地的问题（都按当前年份现算，不是写死的结论）
+       ④ 十年发生了什么（三句话 + 两张图）
+       ⑤ 行业（全景 → 三大榜单 → 定位图）
+       ⑥ 区域 ⑦ 退出 ⑧ 预测 ⑨ 数据质量
+     所有带数字的结论都跟着顶部年份切片器重算，没有一处写死某一年。 */
   function viewOverview() {
     const y = STATE.year;
     const yo = YO[y];
+    const iys = IND.map(n => IY[n + "|" + y]).filter(Boolean);
+    const okRows = iys.filter(r => r.gap_med != null && r.gap_n >= 30);
+
+    return heroBlock(y, yo)
+      + overviewSummary(y, yo, okRows)
+      + viewCoreQuestions(y, yo, iys)
+      + viewTrendSection()
+      + viewIndustrySection(y, iys)
+      + viewBoards(y, iys)
+      + viewPositionSection(y, okRows)
+      + viewProvinceSection(y)
+      + viewExitSection()
+      + viewForecastOverview()
+      + viewQualitySection();
+  }
+
+  /* ---------- ① 首屏：标题 + 年份切片 + 当年关键指标 + 同比 ---------- */
+  function heroBlock(y, yo) {
     const yPrev = y > YEARS[0] ? YO[y - 1] : null;
-
-    /* --- 0. 首屏叙事：分析问题 + 三条结论 + 三步引导 ---
-       评委打开页面 10 秒内要先看到「问题是什么、答出了什么」，而不是直接进仪表盘 */
-    const tr = D3.year_trend;
-    const tFirst = tr[0], tLast = tr[tr.length - 1];
-    const kmArr = D.survival.km;
-    const km5 = kmArr.find(k => k.t === 5), km10 = kmArr[kmArr.length - 1];
-    const growth = (tLast.cap / tFirst.cap).toFixed(1);
-
-    /* 首屏问题模块的结论数字（全部现算，不写死，避免与数据脱节） */
-    const yL = YO[LAST] || yo;
-    const gapMed = yL.gap_med;
-    const posShare = yL.pos_share;
-    /* 问题二的数字：够格的行业里，多少个溢价中位为正 */
-    const allInd = IND.map(n => IY[n + "|" + LAST]).filter(Boolean);
-    const indOk = allInd.filter(r => r.gap_med != null && r.gap_n >= 30);
-    const indProfit = indOk.filter(r => r.gap_med > 0);
-    /* 问题三的数字：三类判定各有多少家 */
-    const vCount = [0, 0, 0, 0, 0];
-    F.forEach(f => { vCount[f[10]] = (vCount[f[10]] || 0) + 1; });
-    const nOvsFirm = F.filter(f => f[4] === 1).length;
-
-    const findings = `
-    <div class="qline">
-      <div><span class="qn">问题一</span>
-        <span class="qt">出海比在境内做生意更赚钱吗？</span>
-        <span class="qa">用「海外毛利率 − 境内毛利率」直接量，不看收入规模看毛利加成</span>
-        <span class="qc">结论：<b class="qcnum">${sign(gapMed)}pp</b> —— ${LAST} 年出海企业的溢价中位数；
-          <b class="qcnum">${pct(posShare)}</b> 的企业溢价为正，即出海确实比在境内更赚，但只有六成。</span></div>
-      <div><span class="qn">问题二</span>
-        <span class="qt">哪些行业、哪些省值得进？</span>
-        <span class="qa">按门槛（要多大才能进）× 溢价（进去赚不赚）× 容量（池子多深）三维定位</span>
-        <span class="qc">结论：<b class="qcnum">${indProfit.length} / ${indOk.length}</b> 个样本够用的行业溢价中位为正
-          —— 不到一半的行业出海是赚的，进场要挑。</span></div>
-      <div><span class="qn">问题三</span>
-        <span class="qt">这家企业该加码还是止损？</span>
-        <span class="qa">机器学习打分 ＋ 6 条可解释硬规则 ＋ 同侪分位，输出三档结论</span>
-        <span class="qc">结论：${nOvsFirm.toLocaleString()} 家出海企业中，
-          <b class="qcnum">${vCount[1]}</b> 家建议加码、<b class="qcnum">${vCount[2]}</b> 家维持、
-          <b class="qcnum">${vCount[4]}</b> 家收缩，加码只占
-          <b class="qcnum">${(vCount[1] / nOvsFirm * 100).toFixed(1)}%</b>。</span></div>
-    </div>
-    <div class="findings">
-      <div class="find f1">
-        <div class="fh"><span class="fnum">${growth}<i>×</i></span>
-          <span class="ftag">${tFirst.year}→${tLast.year} 海外收入合计</span></div>
-        <div class="ft">出海从少数派变过半：出海率 <b>${pct(tFirst.ovs_rate)}→${pct(tLast.ovs_rate)}</b>，
-          海外收入合计 <b>${(tFirst.cap / 10000).toFixed(2)}→${(tLast.cap / 10000).toFixed(2)} 万亿元</b>。</div>
-      </div>
-      <div class="find f2">
-        <div class="fh"><span class="fnum">${sign(tLast.gap_med)}<i>pp</i></span>
-          <span class="ftag">${tLast.year} 年出海溢价中位</span></div>
-        <div class="ft">溢价确实存在，但<b>只在披露够的年份才敢下结论</b>：${tFirst.year} 年仅
-          <b>${pct(tFirst.gap_cov_ovs)}</b> 的出海企业能算出溢价，${tLast.year} 年升到 <b>${pct(tLast.gap_cov_ovs)}</b>。</div>
-      </div>
-      <div class="find f3">
-        <div class="fh"><span class="fnum">${kmArr[0] ? kmArr[0].hazard : "—"}<i>%</i></span>
-          <span class="ftag">出海第 1 年退出率</span></div>
-        <div class="ft">风险集中在头几年——第 1 年退出率是第 2 年的
-          <b>${kmArr[1] ? (kmArr[0].hazard / kmArr[1].hazard).toFixed(1) : "1.6"} 倍</b>；熬过 5 年
-          <b>${km5 ? km5.surv : "—"}%</b>、10 年 <b>${km10 ? km10.surv : "—"}%</b> 还在出海。</div>
-      </div>
-    </div>
-    <div class="guide">
-      <div class="guide-h">先看这里 <em>约 3 分钟看完核心</em></div>
-      <div class="gsteps">
-        <button class="gstep" data-go="sec-trend">
-          <span class="gn">1</span>
-          <span><b>看十年走势</b><span>出海是变强了还是变多了</span></span>
-          <span class="gar">↓</span>
-        </button>
-        <button class="gstep" data-go="sec-pos">
-          <span class="gn">2</span>
-          <span><b>点一个行业气泡</b><span>看它的门槛、溢价与十年轨迹</span></span>
-          <span class="gar">↓</span>
-        </button>
-        <button class="gstep" data-go="firm">
-          <span class="gn">3</span>
-          <span><b>查一家企业</b><span>600519 贵州茅台，看该加码还是止损</span></span>
-          <span class="gar">→</span>
-        </button>
-      </div>
-    </div>`;
-
-    /* --- 1. 首屏概览 --- */
-    const hero = `
+    return `
     <section class="hero">
       <div class="herotop">
         <div>
           <span class="eyebrow"><i></i>赛道四 · 行业发展与企业经营数据分析</span>
           <h1>出海质量图谱</h1>
-          <p class="sub">A 股 ${D.meta.n_firms.toLocaleString()} 家企业 · ${D.meta.year_lo}–${LAST} 年 ${D.meta.n_obs.toLocaleString()} 个观测 ·
-          数据源：自采公开接口（东方财富 F10 / 交易所披露）</p>
+          <p class="sub">A 股 ${D.meta.n_firms.toLocaleString()} 家企业 · ${D.meta.year_lo}–${LAST} 年
+            ${D.meta.n_obs.toLocaleString()} 个企业·年观测 · 数据源：自采公开接口（东方财富 F10 / 交易所披露）。
+            下面每个区块的数字都跟着顶部的年份走。</p>
         </div>
         <div class="yearbox">
-          <span class="ylab">观察年份</span>
+          <span class="ylab">观察年份 · 切换后全页重算</span>
           <div class="ychips" data-role="year">${yearChips(y, "data-year")}</div>
         </div>
       </div>
-      ${findings}
       ${kpiBlock([
-      { v: pct(yo.ovs_rate), l: `${y} 年企业出海率`, u: "" },
+      { v: pct(yo.ovs_rate), l: `${y} 年出海率（有海外收入的企业占比）` },
       { v: sign(yo.gap_med), l: `${y} 年出海溢价中位`, u: "pp" },
-      { v: pct(yo.gap_cov), l: "溢价可算比例", warn: yo.gap_cov < 60 },
-      { v: fmt(yo.cap, 0), l: "海外收入合计（亿元）" },
-      { v: yo.ind_ok + "/" + yo.ind_all, l: "行业样本够用的个数" },
+      { v: pct(yo.gap_cov), l: "出海企业里能算出溢价的比例", warn: yo.gap_cov < 60 },
+      { v: fmt(yo.cap, 0), l: "海外收入合计", u: "亿元" },
+      { v: yo.ind_ok + " / " + yo.ind_all, l: "溢价样本够用（≥30 个）的行业数" },
     ])}
-      ${yPrev ? `<p class="heronote">
-        ${y} 年对比 ${y - 1} 年：出海率 ${pct(yPrev.ovs_rate)} → <b>${pct(yo.ovs_rate)}</b>；
-        溢价中位 ${sign(yPrev.gap_med)}pp → <b>${sign(yo.gap_med)}pp</b>；
-        溢价可算比例 ${pct(yPrev.gap_cov)} → <b>${pct(yo.gap_cov)}</b>。
-        ${y <= 2017 ? "早年份披露率明显偏低，跨年比较要留够余地。" : ""}
-      </p>` : ""}
+      ${yPrev ? `<div class="cmp2 yoyrow">
+        ${yoyItem(`${y - 1} → ${y} 出海率`, yo.ovs_rate, yPrev.ovs_rate, "%", 1)}
+        ${yoyItem(`${y - 1} → ${y} 溢价中位`, yo.gap_med, yPrev.gap_med, "pp", 2)}
+        ${yoyItem(`${y - 1} → ${y} 能算出溢价的比例`, yo.gap_cov, yPrev.gap_cov, "%", 1)}
+      </div>` : ""}
     </section>`;
+  }
 
-    /* --- 1b. 十年全局趋势（v3 新增） --- */
-    const trendSec = viewTrendSection();
+  /* 同比小卡：现在是「上年 → 本年 + 变化」，比一句长句好读 */
+  function yoyItem(label, now, prev, unit, dg) {
+    if (now == null || prev == null) return "";
+    const d = now - prev;
+    const cls = Math.abs(d) < 0.005 ? "" : (d > 0 ? "up" : "down");
+    return `<div class="cmp"><span>${esc(label)}</span><b>${fmt(now, dg)}${unit}</b>
+      <i class="${cls}">${sign(d, dg)}${unit}</i></div>`;
+  }
 
-    const iys = IND.map(n => IY[n + "|" + y]).filter(Boolean);
-    const okRows = iys.filter(r => r.gap_med != null && r.gap_n >= 30);
-    const thinRows = iys.filter(r => r.gap_med != null && r.gap_n < 30);
-    /* 定位图点中的行业（v3 新增：点气泡 → 下方展开该行业体检卡） */
+  /* 行业间溢价分化度（p90 − p10），用来回答「行业之间的差距在拉大还是收窄」 */
+  function indGapSpread(yy) {
+    const v = IND.map(n => IY[n + "|" + yy]).filter(Boolean)
+      .filter(r => r.gap_med != null && r.gap_n >= 30).map(r => r.gap_med).sort((a, b) => a - b);
+    if (v.length < 6) return null;
+    const q = p => v[Math.min(v.length - 1, Math.max(0, Math.round((v.length - 1) * p)))];
+    return { p10: q(0.1), p90: q(0.9), spread: q(0.9) - q(0.1), n: v.length };
+  }
+
+  /* ---------- ③ 两个核心问题：全部按当前年份切片现算 ----------
+     旧版三个问题是「通用设问 + 固定用 2025 年数字回答」，切到 2018 年结论也不变。
+     现在两个问题都只问「这一年」，结论、名单、同比全部跟着年份重算。 */
+  function viewCoreQuestions(y, yo, iys) {
+    const py = y > YEARS[0] ? y - 1 : null;
+
+    const ok = iys.filter(r => r.gap_med != null && r.gap_n >= 30).slice().sort((a, b) => b.gap_med - a.gap_med);
+    const win = ok.filter(r => r.gap_med > 0);
+    const lose = ok.filter(r => r.gap_med <= 0);
+    const winShare = ok.length ? win.length / ok.length * 100 : null;
+
+    const prevOk = py ? IND.map(n => IY[n + "|" + py]).filter(Boolean)
+      .filter(r => r.gap_med != null && r.gap_n >= 30) : [];
+    const prevWin = prevOk.filter(r => r.gap_med > 0);
+    const prevWinSet = new Set(prevWin.map(r => r.ind));
+    const winSet = new Set(win.map(r => r.ind));
+    const newlyWin = [...winSet].filter(n => !prevWinSet.has(n));
+    const lostWin = [...prevWinSet].filter(n => !winSet.has(n));
+
+    /* 进得去且赚得到：门槛 ≤50 分位 且 溢价为正 */
+    const enter = win.filter(r => r.gate_med != null && r.gate_med <= 0.5)
+      .slice().sort((a, b) => (b.cap || 0) - (a.cap || 0));
+    const prevEnter = prevWin.filter(r => r.gate_med != null && r.gate_med <= 0.5);
+    const enterSet = new Set(enter.map(r => r.ind));
+    const prevEnterSet = new Set(prevEnter.map(r => r.ind));
+
+    const tr = D3.year_trend;
+    let startPos = LAST;
+    for (let i = tr.length - 1; i >= 0; i--) { if (tr[i].gap_med > 0) startPos = tr[i].year; else break; }
+    const spr = indGapSpread(y), spr0 = indGapSpread(tr[0].year);
+
+    /* —— 问题一 —— */
+    const q1v = winShare == null
+      ? "这一年样本够用的行业太少，不给方向性判断。"
+      : winShare >= 70
+        ? `多数行业出海是赚的（${win.length}/${ok.length}）。${y} 年的出海更像「普遍有毛利加成」，「出海」这个动作本身不构成风险。`
+        : winShare >= 40
+          ? `赚的和不赚的差不多各占一半（${win.length}/${ok.length}）。说明「出海」本身不保证赚钱，<b>选哪个行业进比要不要出海更决定结果</b>。`
+          : `只有少数行业出海能赚钱（${win.length}/${ok.length}）。这一年的出海更像「用利润换份额」，进场前必须先验证单客户毛利结构。`;
+
+    const q1 = `
+    <article class="qcard">
+      <div class="qh"><span class="qn">问题一</span>
+        <span class="qt">${y} 年，出海到底还赚不赚钱？赚在哪些行业？</span></div>
+      <p class="qdef">口径：<b>出海溢价 ＝ 海外业务毛利率 − 境内业务毛利率（pp）</b>。
+        正值＝同样一块钱收入放在海外更赚；负值＝出海反而更薄利。只比同一家公司的两块业务，不受规模影响。</p>
+      <div class="qstats">
+        <div class="qstat"><b>${sign(yo.gap_med)}<i>pp</i></b><span>${y} 年溢价中位</span></div>
+        <div class="qstat"><b>${pct(yo.pos_share)}</b><span>企业层面溢价为正</span></div>
+        <div class="qstat"><b>${win.length} / ${ok.length}</b><span>行业层面溢价为正</span></div>
+      </div>
+      <p class="qv">${q1v}</p>
+      ${win.length ? `<div class="qnames">
+        <span class="qntag">最赚的几个</span>
+        ${win.slice(0, 4).map(r => `<span class="qname">${esc(indShort(r.ind, 96))}<em>${sign(r.gap_med)}pp</em></span>`).join("")}
+        ${lose.length && lose.length <= 3 ? `<span class="qntag" style="background:#FDF0EE;border-color:#F0C4BE;color:#9C2B1E">还在赔的</span>
+        ${lose.map(r => `<span class="qname" style="background:#FDF0EE;border-color:#F0C4BE;color:#9C2B1E">${esc(indShort(r.ind, 96))}<em>${sign(r.gap_med)}pp</em></span>`).join("")}` : ""}
+      </div>` : ""}
+      <div class="qfoot">${py ? `比 ${py} 年：溢价中位 ${sign(YO[py].gap_med)}pp → <b>${sign(yo.gap_med)}pp</b>（${sign(yo.gap_med - YO[py].gap_med)}pp），
+        赚钱行业 ${prevWin.length} → <b>${win.length}</b> 个；新转为赚钱 ${newlyWin.length} 个，掉出去 ${lostWin.length} 个。` : "这是样本窗口的第一年，没有同比。"}</div>
+      <div class="qfoot">十年总体：${tr[0].year} 年 ${sign(tr[0].gap_med)}pp → ${LAST} 年 ${sign(tr[tr.length - 1].gap_med)}pp，
+        自 <b>${startPos} 年</b>起连续 ${LAST - startPos + 1} 年为正——出海整体从「更薄利」翻成「更赚」，但这是全市场中位数，具体到行业仍要单独看。</div>
+    </article>`;
+
+    /* —— 问题二 —— */
+    const q2v = !enter.length
+      ? `这一年没有「既好进又赚钱」的行业：<b>门槛低的都在赔钱，赚钱的门槛都不低</b>。要么先攒到行业门槛以上，要么这一年别进。`
+      : enter.length >= 8
+        ? `机会窗口很宽：<b>${enter.length} 个行业</b>既不需要很大体量就能进、又确实赚钱。这类年份适合试探性进入，试错成本低。`
+        : `窗口不窄但也不大：只有 <b>${enter.length} 个行业</b>同时满足「门槛 ≤50 分位」和「溢价为正」。其余行业要么进不去，要么进去赔钱。`;
+
+    const q2 = `
+    <article class="qcard">
+      <div class="qh"><span class="qn">问题二</span>
+        <span class="qt">${y} 年想进的话，该挑哪个行业？</span></div>
+      <p class="qdef">口径三个维度：<b>门槛</b>＝该行业出海企业的规模分位中位数（越低＝不用很大就能出海）；
+        <b>溢价</b>＝进去赚不赚；<b>容量</b>＝该行业当年海外收入合计（池子多深）。</p>
+      <div class="qstats">
+        <div class="qstat"><b>${enter.length}</b><span>门槛≤50 分位且赚钱</span></div>
+        <div class="qstat"><b>${ok.length ? pct(enter.length / ok.length * 100) : "—"}</b><span>占样本够用行业的比例</span></div>
+        <div class="qstat"><b>${spr ? fmt(spr.spread, 1) : "—"}<i>pp</i></b><span>行业间溢价分化（p90−p10）</span></div>
+      </div>
+      <p class="qv">${q2v}</p>
+      ${enter.length ? `<div class="qnames">
+        <span class="qntag">建议优先看</span>
+        ${enter.slice(0, 4).map(r => `<span class="qname">${esc(indShort(r.ind, 96))}
+          <em>门槛 ${(r.gate_med * 100).toFixed(0)} 分位 · ${sign(r.gap_med)}pp · ${fmt(r.cap, 0)} 亿</em></span>`).join("")}
+      </div>` : ""}
+      <div class="qfoot">${py ? `比 ${py} 年：可进行业 ${prevEnter.length} → <b>${enter.length}</b> 个；
+        新开门 ${[...enterSet].filter(n => !prevEnterSet.has(n)).length} 个，关掉 ${[...prevEnterSet].filter(n => !enterSet.has(n)).length} 个。` : "这是样本窗口的第一年，没有同比。"}</div>
+      <div class="qfoot">十年总体：行业间溢价分化 ${spr0 ? fmt(spr0.spread, 1) : "—"}pp（${tr[0].year}）→
+        <b>${spr ? fmt(spr.spread, 1) : "—"}pp</b>（${y}）——${spr && spr0 && spr.spread > spr0.spread ? "差距在拉大，「进对行业」比「要不要出海」更值钱" : "差距没有明显扩大，行业选择的边际价值没变"}。</div>
+    </article>`;
+
+    return `<section class="qwrap">
+      <div class="qwrap-h"><b>${y} 年两个核心问题</b>
+        <span>每个数字都按 ${y} 年切片现算；换年份，结论和名单一起变</span></div>
+      <div class="qq">${q1}${q2}</div>
+    </section>`;
+  }
+
+  /* ---------- ⑤ 三大榜单（标题带年份） ---------- */
+  function viewBoards(y, iys) {
+    const byGap = iys.filter(r => r.gap_med != null && r.gap_n >= 100).sort((a, b) => b.gap_med - a.gap_med);
+    const byGate = iys.filter(r => r.gate_med != null && r.n >= 100).sort((a, b) => a.gate_med - b.gate_med);
+    const byCap = iys.filter(r => r.cap > 0).sort((a, b) => b.cap - a.cap);
+
+    const card = (title, sub, items, hint) => `
+      <section class="card">
+        <h3>${y} 年 · ${title}</h3>
+        <p class="hint" style="margin:2px 0 6px">${sub}</p>
+        ${items.length ? hbars(items, { width: 400, labelW: 118, rowH: 30 }) : emptyChart("这一年的样本不够排榜")}
+        <p class="hint">${hint}</p>
+      </section>`;
+
+    return `<div class="grid3" id="sec-boards">
+      ${card("溢价最高 · 赚得到的行业", "海外毛利率比境内高多少（pp）",
+      byGap.slice(0, 6).map(r => ({ label: indShort(r.ind, 200), v: r.gap_med, c: "#C0392B", vt: sign(r.gap_med) + "pp" })),
+      `只统计溢价样本 ≥100 的行业，避免小样本噪声。${byGap.length} 个行业达标，数值越高，出海在这个行业越有毛利加成。`)}
+      ${card("门槛最低 · 最容易进的行业", "要多大体量才能出海（规模分位，越低越容易）",
+        byGate.slice(0, 6).map(r => ({ label: indShort(r.ind, 200), v: (r.gate_med || 0) * 100, c: "#2E86AB", vt: (r.gate_med * 100).toFixed(0) + " 分位" })),
+        `门槛＝行业内出海企业的规模分位中位数。数字越低，不用很大就能出海。`)}
+      ${card("容量最大 · 池子最深的行业", "该行业当年海外收入合计（亿元）",
+          byCap.slice(0, 6).map(r => ({ label: indShort(r.ind, 200), v: r.cap, c: "#4A6FA5", vt: fmt(r.cap, 0) + " 亿" })),
+          `容量＝${y} 年该行业海外收入合计，是「已经开发出来的盘子」，不是市场总规模。`)}
+    </div>`;
+  }
+
+  /* ---------- 行业定位图（气泡 + 点选体检卡） ---------- */
+  function viewPositionSection(y, okRows) {
     const posPick = STATE.posPick && IY[STATE.posPick + "|" + y] ? STATE.posPick : null;
+    const thinRows = IND.map(n => IY[n + "|" + y]).filter(Boolean).filter(r => r.gap_med != null && r.gap_n < 30);
     const scatterRows = okRows.map(r => ({
-      label: shortName(r.ind),
+      label: indShort(r.ind, 90),
       x: (r.gate_med || 0) * 100,
       y: r.gap_med,
       s: r.cap || 1,
       c: r.gap_med >= 3 ? "#C0392B" : r.gap_med >= 0 ? "#D68910" : "#4A8B6F",
-      // 描边：整个行业能不能赚到钱（溢价为正的企业占比过半 = 实心深描边）
       stroke: r.profitable === 1 ? "#1A2433" : "#FFFFFF",
       dash: r.profitable === 0,
       hollow: false,
@@ -762,15 +963,15 @@
       tip: `${r.ind}\n门槛 ${((r.gate_med || 0) * 100).toFixed(0)} 分位 | 溢价中位 ${r.gap_med}pp\n`
         + `溢价为正 ${r.pos_share}%（${r.gap_n} 个样本）| 容量 ${fmt(r.cap, 0)} 亿`,
     }));
-    const posChart = `
+    return `
     <section class="card" id="sec-pos">
       <div class="card-head">
         <h2>行业定位图 · ${y} 年</h2>
-        <p>横轴是门槛（该行业出海企业的规模分位中位数，越低越容易进），纵轴是出海溢价中位（海外毛利率比境内高多少）。
-        <b>右上＝进得去且赚得到</b>；右下＝进得去但赔钱；左上＝少数人在赚钱；左下＝又难又不赚。<b>点气泡看这个行业的详情。</b></p>
+        <p>横轴＝<b>门槛</b>（该行业出海企业的规模分位中位数，越低越容易进）；纵轴＝<b>出海溢价中位</b>（海外毛利率比境内高多少 pp）。
+        <b>右上＝进得去且赚得到</b>；右下＝进得去但赔钱；左上＝少数人在赚钱；左下＝又难又不赚。<b>点一个气泡，下面展开这个行业的体检卡。</b></p>
       </div>
       ${okRows.length ? scatter(scatterRows, {
-      xlabel: "出海门槛（规模分位，越低越容易进）", ylabel: "出海溢价中位 (pp)", height: 430, labelTop: 26,
+      xlabel: "出海门槛（规模分位，越低越容易进）", ylabel: "出海溢价中位 (pp)", height: 430, labelTop: 22,
       pickField: "ind", pickValue: posPick,
     }) : warnBar(`${y} 年没有溢价样本 ≥30 的行业，这一年的行业定位图画不出来。`)}
       <div class="legend">
@@ -780,60 +981,15 @@
         <span><i style="background:#fff;border:2px solid #1A2433"></i>黑边＝该行业过半企业能赚钱</span>
         <span><i style="background:#fff;border:2px dashed #B9C2CF"></i>白虚边＝过半企业亏</span>
       </div>
-      ${thinRows.length ? `<p class="hint dim">另有 ${thinRows.length} 个行业溢价样本不足 30（${thinRows.map(r => shortName(r.ind) + " " + r.gap_n + " 个").join("、")}），
-        中位数不稳，这一版没画出来。</p>` : ""}
+      ${thinRows.length ? `<p class="hint dim">另有 ${thinRows.length} 个行业溢价样本不足 30
+        （${thinRows.slice(0, 8).map(r => indShort(r.ind, 60) + " " + r.gap_n + " 个").join("、")}${thinRows.length > 8 ? " 等" : ""}），
+        中位数不稳，不进定位图；完整数字可在上方「全行业明细表」里查。</p>` : ""}
       ${viewPosCard(posPick, y)}
       <div class="sectools">
         <button class="xbtn" data-act="csv" data-pfx="行业定位图">下载这张表 CSV</button>
         <button class="xbtn" data-act="png" data-pfx="行业定位图">图表存 PNG</button>
       </div>
     </section>`;
-
-    /* --- 3. 三个榜单（年份联动） --- */
-    const byGap = iys.filter(r => r.gap_med != null && r.gap_n >= 100).sort((a, b) => b.gap_med - a.gap_med);
-    const byGate = iys.filter(r => r.gate_med != null && r.n >= 100).sort((a, b) => a.gate_med - b.gate_med);
-    const byCap = iys.filter(r => r.cap > 0).sort((a, b) => b.cap - a.cap);
-    const boards = `
-    <div class="grid3">
-      <section class="card">
-        <h3>溢价最高 · 赚得到的行业</h3>
-        ${hbars(byGap.slice(0, 6).map(r => ({ label: shortName(r.ind), v: r.gap_med, c: "#C0392B", vt: sign(r.gap_med) + "pp" })),
-      { width: 380, labelW: 100 })}
-        <p class="hint">溢价样本 ≥100 才上榜。这些行业出海确实有毛利加成。</p>
-      </section>
-      <section class="card">
-        <h3>门槛最低 · 最容易进的行业</h3>
-        ${hbars(byGate.slice(0, 6).map(r => ({ label: shortName(r.ind), v: (r.gate_med || 0) * 100, c: "#2E86AB", vt: (r.gate_med * 100).toFixed(0) + " 分位" })),
-      { width: 380, labelW: 100 })}
-        <p class="hint">门槛＝行业内出海企业的规模分位中位数。数字越低，不用很大就能出海。</p>
-      </section>
-      <section class="card">
-        <h3>容量最大 · 池子最深的行业</h3>
-        ${hbars(byCap.slice(0, 6).map(r => ({ label: shortName(r.ind), v: r.cap, c: "#4A6FA5", vt: fmt(r.cap, 0) + " 亿" })),
-      { width: 380, labelW: 100 })}
-        <p class="hint">容量＝该行业 ${y} 年海外收入合计。注意这是「已开发容量」，不是市场总规模。</p>
-      </section>
-    </div>`;
-
-    /* --- 4. 行业全景（条形 + 指标切换器 + 行业选择卡） --- */
-    const indSec = viewIndustrySection(y, iys);
-
-    /* --- 5. 区域全景 --- */
-    const provSec = viewProvinceSection(y);
-
-    /* --- 6. 退出诊断 --- */
-    const exitSec = viewExitSection();
-
-    /* --- 6b. 市场预测（容量外推 + 行业溢价路径 + 诚实披露） --- */
-    const fcSec = viewForecastOverview();
-
-    /* --- 7. 一键总结 --- */
-    const sumSec = overviewSummary(y, yo, okRows, byGap, byGate, byCap);
-
-    /* --- 8. 数据质量（v4 新增，作为证据附录收尾） --- */
-    const qualSec = viewQualitySection();
-
-    return hero + trendSec + posChart + boards + indSec + provSec + exitSec + fcSec + sumSec + qualSec;
   }
 
   /* ==================== v5：总观页市场预测 ==================== */
@@ -973,7 +1129,9 @@
     </section>`;
   }
 
-  /* ==================== 十年全局趋势（v3 新增） ==================== */
+  /* ==================== ④ 十年走势（三句话 + 两张图） ====================
+     旧版把「17.0×」「4.88pp」这种裸数字摆在首屏，读者看不懂单位，
+     也不知道这个数意味着好还是坏。现在每个数字前面先给结论，数字后面给口径。 */
   function viewTrendSection() {
     const rows = D3.year_trend;
     const first = rows[0], last = rows[rows.length - 1];
@@ -981,7 +1139,6 @@
     const sGap = rows.map(r => ({ x: r.year, y: r.gap_med }));
     const sCov = rows.map(r => ({ x: r.year, y: r.gap_cov_ovs }));
 
-    /* 三条线量纲不同（% 与 pp），拆成两张图：比例一张、溢价一张 */
     const chartPct = multiLine([
       { name: "企业出海率", color: "#2E86AB", pts: sRate },
       { name: "溢价可算比例（出海组内）", color: "#7B61A8", pts: sCov },
@@ -996,13 +1153,62 @@
       xlabel: "年份", ylabel: "出海溢价中位 (pp)", endFmt: v => sign(v) + "pp",
     });
 
-    const capFirst = first.cap, capLast = last.cap;
+    /* 倍数与年化：17.01× 这种写法读者不知道 × 是什么，改成「变成原来的 N 倍」＋年化 */
+    const mult = last.cap / first.cap;
+    const yrSpan = last.year - first.year;
+    const cagr = Math.pow(mult, 1 / yrSpan) - 1;
+
+    /* 溢价连续为正的起点（从最新一年往前推，遇到负值就停） */
+    let startPos = last.year;
+    for (let i = rows.length - 1; i >= 0; i--) { if (rows[i].gap_med > 0) startPos = rows[i].year; else break; }
+
+    const kmArr = D.survival.km;
+    const km1 = kmArr[0], km2 = kmArr[1];
+    const km5 = kmArr.find(k => k.t === 5), kmLast = kmArr[kmArr.length - 1];
+
+    const lead = `
+    <div class="lead3">
+      <div class="lead l1">
+        <div class="lt">规模 · 出海从少数派变成过半</div>
+        <div class="lv">${mult.toFixed(1)}<i>倍</i></div>
+        <div class="ld">海外收入合计从 <b>${fmt(first.cap / 10000, 2)} 万亿</b> 涨到 <b>${fmt(last.cap / 10000, 2)} 万亿</b>，
+          ${yrSpan} 年间变成原来的 <b>${mult.toFixed(1)} 倍</b>（年均 +${(cagr * 100).toFixed(1)}%）；
+          同期出海企业占比从 <b>${pct(first.ovs_rate)}</b> 升到 <b>${pct(last.ovs_rate)}</b>。</div>
+      </div>
+      <div class="lead l2">
+        <div class="lt">赚钱 · 从「出海更薄利」变成「出海更赚」</div>
+        <div class="lv">${sign(last.gap_med)}<i>pp</i></div>
+        <div class="ld">出海溢价中位从 <b>${sign(first.gap_med)}pp</b> 走到 <b>${sign(last.gap_med)}pp</b>，
+          自 <b>${startPos} 年</b>起连续 ${last.year - startPos + 1} 年为正。
+          但要打折看：${first.year} 年只有 <b>${pct(first.gap_cov_ovs)}</b> 的出海企业能算出溢价，${last.year} 年才到
+          <b>${pct(last.gap_cov_ovs)}</b>——早年的中位数本身是被筛选过的。</div>
+      </div>
+      <div class="lead l3">
+        <div class="lt">存活 · 风险集中在出海头一年</div>
+        <div class="lv">${km1 ? km1.hazard : "—"}<i>%</i></div>
+        <div class="ld">第 1 年退出率 <b>${km1 ? km1.hazard : "—"}%</b>${km2 ? `，是第 2 年（${km2.hazard}%）的
+          <b>${(km1.hazard / km2.hazard).toFixed(1)} 倍</b>` : ""}；熬过 5 年还有 <b>${km5 ? km5.surv : "—"}%</b> 在出海，
+          10 年 <b>${kmLast ? kmLast.surv : "—"}%</b>。<b>止损线要卡在头两年。</b></div>
+      </div>
+    </div>`;
+
+    const explain = `
+    <div class="explain">
+      <b>三个词先说清楚，后面所有图都用这套口径：</b>
+      <br>· <b>出海溢价</b>（单位 pp，百分点）＝ 海外业务毛利率 − 境内业务毛利率。
+      例：+4.88pp 指「同一家公司，海外那块业务比境内那块多 4.88 个百分点的毛利率」，<b>不是增长率，也不是利润率本身</b>。
+      <br>· <b>出海率</b>＝有海外收入的企业 ÷ 全部 A 股企业，回答「多少人出海」，不回答「出海赚不赚」。
+      <br>· <b>渗透度</b>＝海外收入 ÷ 营业总收入，回答「这家企业有多依赖海外」，100% 即全部收入来自境外。
+    </div>`;
+
     return `
     <section class="card" id="sec-trend">
       <div class="card-head">
-        <h2>十年走势 · 这十年是变强了还是变多了</h2>
-        <p>三条线各自回答一件事：出海的企业变多了吗？能算出溢价的企业变多了吗？出海真的更赚钱了吗？</p>
+        <h2>十年走势 · 这十年到底变强了还是变多了</h2>
+        <p>三句话概括 ${first.year}→${last.year}：<b>规模变大了、出海变赚了、但头一年依然最容易出局</b>。下面两张图是这三句话的证据。</p>
       </div>
+      ${lead}
+      ${explain}
       <div class="grid2">
         <section class="card">
           <h3>覆盖率 · 出海的企业与能算出溢价的企业</h3>
@@ -1012,22 +1218,23 @@
             <span><i style="background:#7B61A8"></i>溢价可算比例（出海组内）</span>
           </div>
           <p class="hint">${first.year} 年只有 ${pct(first.gap_cov_ovs)} 的出海企业能算出溢价，${last.year} 年是 ${pct(last.gap_cov_ovs)}。
-          早年的溢价中位数不可靠，因为能算的那部分本身就是选择性披露的。</p>
+          早年能算的那部分本身就是选择性披露的，所以早年的溢价中位数不可靠——这也是为什么本产品每一张溢价图都标注了样本量。</p>
         </section>
         <section class="card">
           <h3>出海溢价中位 · 十年走势</h3>
           ${chartGap}
           <p class="hint">从 ${sign(first.gap_med)}pp 到 ${sign(last.gap_med)}pp，方向是好的。但这个上升里有多少来自
-          「披露改善、样本构成变化」、多少是真实盈利改善，页面给不出答案——要看平衡面板与企业固定效应的结果，
+          「披露改善、样本构成变化」、多少是真实盈利改善，单看这条线给不出答案——要看平衡面板与企业固定效应的结果，
           那部分在分析报告里。</p>
         </section>
       </div>
       <div class="statline wrap">
         <div><span>${first.year} 出海率</span><b>${pct(first.ovs_rate)}</b></div>
         <div><span>${last.year} 出海率</span><b>${pct(last.ovs_rate)}</b></div>
-        <div><span>海外收入 ${first.year}</span><b>${fmt(capFirst / 10000, 2)} 万亿</b></div>
-        <div><span>海外收入 ${last.year}</span><b>${fmt(capLast / 10000, 2)} 万亿</b></div>
-        <div><span>容量增长</span><b class="up">${(capLast / capFirst).toFixed(2)}×</b></div>
+        <div><span>海外收入 ${first.year}</span><b>${fmt(first.cap / 10000, 2)} 万亿</b></div>
+        <div><span>海外收入 ${last.year}</span><b>${fmt(last.cap / 10000, 2)} 万亿</b></div>
+        <div><span>${yrSpan} 年增长倍数</span><b class="up">${mult.toFixed(1)} 倍</b></div>
+        <div><span>年均增速</span><b class="up">+${(cagr * 100).toFixed(1)}%</b></div>
       </div>
     </section>`;
   }
@@ -1101,7 +1308,12 @@
     </div>`;
   }
 
-  /* ==================== 行业全景区块 ==================== */
+  /* ==================== ⑤ 行业全景区块 ====================
+     三个改动：
+       ① 图表标签用大类短名 + 按像素截断，不再出现半截字；
+       ② 84 个行业全部画出来会有两米高，默认只画前 12 个，其余折叠；
+       ③ 加搜索框（datalist），直接输入「电子设备 / 医药」就能跳过去，
+          不用在 84 个条形里一个个找。 */
   function viewIndustrySection(y, iys) {
     const METRICS = [
       { k: "score", l: "吸引力分", get: r => r.score, vt: r => fmt(r.score, 2), c: "#4A6FA5", up: true },
@@ -1119,14 +1331,14 @@
     const pick = STATE.indPick && IY[STATE.indPick + "|" + y] ? STATE.indPick : (sorted[0] ? sorted[0].ind : null);
     const pr = pick ? IY[pick + "|" + y] : null;
 
-    /* 被选行业在全部行业里的排名与占比 */
     const rankBy = sorted.findIndex(r => r.ind === pick) + 1;
+    const totalCap = sorted.reduce((s, r) => s + (r.cap || 0), 0);
+    const totalN = sorted.reduce((s, r) => s + (r.n || 0), 0);
     const share = pr ? {
-      cap: sorted.reduce((s, r) => s + (r.cap || 0), 0) ? pr.cap / sorted.reduce((s, r) => s + (r.cap || 0), 0) * 100 : null,
-      n: sorted.reduce((s, r) => s + (r.n || 0), 0) ? pr.n / sorted.reduce((s, r) => s + (r.n || 0), 0) * 100 : null,
+      cap: totalCap ? pr.cap / totalCap * 100 : null,
+      n: totalN ? pr.n / totalN * 100 : null,
     } : null;
 
-    /* 选中行业 vs 全行业中位 */
     const allMed = {
       ovs_rate: median(sorted.map(r => r.ovs_rate)),
       gap_med: median(sorted.map(r => r.gap_med)),
@@ -1135,11 +1347,20 @@
       ratio_med: median(sorted.map(r => r.ratio_med)),
     };
 
+    const barItems = sorted.map(r => ({
+      label: indShort(r.ind, 200),
+      v: met.get(r),
+      c: r.ind === pick ? "#C0392B" : met.c,
+      vt: met.vt(r),
+      pick: r.ind,
+    }));
+    const TOPN = 12;
+
     const detail = pr ? `
       <div class="card ind-detail">
         <div class="card-head">
           <h2>${esc(pr.ind)} · ${y} 年</h2>
-          <p>在 ${sorted.length} 个行业口径里，吸引力排第 <b>${rankBy}</b> 位。
+          <p>在 ${sorted.length} 个行业口径里，${met.l}排第 <b>${rankBy}</b> 位。
           ${share ? `占全部行业海外收入的 <b>${pct(share.cap)}</b>，占全部行业样本的 <b>${pct(share.n)}</b>。` : ""}</p>
         </div>
         <div class="statline wrap">
@@ -1171,29 +1392,42 @@
     <section class="card" id="sec-ind">
       <div class="card-head">
         <h2>行业全景 · ${y} 年</h2>
-        <p>切换指标看排序，点条形选中某个行业，下方给出它跟其他行业的对比。全部 ${IND.length} 个口径。</p>
+        <p>全部 ${IND.length} 个行业口径按「${met.l}」排序。点条形切换选中行业，下方给出它和全行业中位的对比。
+        <b>默认只画前 ${TOPN} 个</b>，其余点开折叠区再看全量。</p>
+      </div>
+      <div class="explain" style="margin-top:0">
+        <b>渗透度是什么：</b>海外收入 ÷ 营业总收入，即「这家企业的收入有多大比例来自境外」。
+        渗透度 30% 说明三成收入在海外；接近 100% 说明基本靠海外吃饭。
+        它衡量的<b>不是出海赚不赚钱</b>，而是<b>出海做到多深、对海外市场有多依赖</b>——
+        和「溢价」要分开看：渗透度高但溢价为负，是「规模上去了、钱没赚到」。
+      </div>
+      <div class="pickerrow">
+        <label>直接搜行业</label>
+        <input class="tsearch" id="indq" list="indlist" placeholder="输入行业名或简称，如 电子设备 / 医药 / 水上运输"
+          value="${pick ? esc(pick) : ""}" autocomplete="off">
+        <datalist id="indlist">${IND.map(n => `<option value="${esc(n)}">${esc(indShort(n, 200))}</option>`).join("")}</datalist>
+        <span class="hint dim">选中后页面按这个行业重绘</span>
       </div>
       <div class="switcher" data-role="indmetric">
         ${METRICS.map(m => `<button class="sw${m.k === mk ? " on" : ""}" data-metric="${m.k}">${m.l}</button>`).join("")}
       </div>
       <div class="indwrap">
-        <div class="indbars">
-          ${hbars(sorted.map(r => ({
-        label: shortName(r.ind),
-        v: met.get(r),
-        c: met.c,
-        vt: met.vt(r),
-        pick: r.ind,
-      })), { width: 560, labelW: 104, rowH: 28 })}
-          <p class="hint dim">点条形可切换选中行业。</p>
+        <div class="indbars" id="indbars">
+          ${hbars(barItems.slice(0, TOPN), { width: 560, labelW: 128, rowH: 28 })}
+          <details class="foldtable">
+            <summary><b>展开全部 ${barItems.length} 个行业</b><span class="fthint"><i class="fc">默认收起，点开看全量</i><i class="fo">已展开，点击收起</i></span></summary>
+            ${hbars(barItems, { width: 560, labelW: 128, rowH: 28 })}
+          </details>
+          <p class="hint dim">点条形可切换选中行业。红色那条是当前选中的行业。</p>
         </div>
         <div class="indtable">
           <details class="foldtable">
             <summary><b>全行业明细表</b>（${sorted.length} 行）<span class="fthint"><i class="fc">默认折叠，点开查看</i><i class="fo">已展开，点击收起</i></span>
               <button class="xbtn foldcsv" data-act="csv" data-pfx="行业明细">下载 CSV</button></summary>
-            <div class="tablewrap"><table class="dt">
-              <thead><tr><th>行业</th><th>样本</th><th>出海率</th><th>渗透度中位</th>
-              <th>溢价中位</th><th>溢价为正</th><th>门槛</th><th>容量(亿)</th><th>吸引力</th></tr></thead>
+            <input class="tsearch" id="indfilter" placeholder="在表里筛行业…" autocomplete="off">
+            <div class="tablewrap"><table class="dt" id="indtableel">
+              <thead><tr><th>行业</th><th>样本</th><th>出海率</th><th>渗透度<br><span class="dim" style="font-weight:400">海外收入占比</span></th>
+              <th>溢价中位<br><span class="dim" style="font-weight:400">pp</span></th><th>溢价为正</th><th>门槛</th><th>容量(亿)</th><th>吸引力</th></tr></thead>
               <tbody>${sorted.map(r => `<tr class="${r.ind === pick ? "sel" : ""}" data-ind="${esc(r.ind)}">
                 <td class="l">${esc(shortName(r.ind))}</td><td>${r.n}</td><td>${pct(r.ovs_rate)}</td>
                 <td>${pct(r.ratio_med)}</td>
@@ -1413,6 +1647,11 @@
       <div class="switcher" data-role="provmetric">
         ${PM.map(m => `<button class="sw${m.k === mk ? " on" : ""}" data-metric="${m.k}">${m.l}</button>`).join("")}
       </div>
+      <div class="pickerrow">
+        <label>直接搜省份</label>
+        <input class="tsearch" id="provq" list="provlist" placeholder="输入省份，如 广东 / 江苏" autocomplete="off">
+        <datalist id="provlist">${PROV.map(n => `<option value="${esc(n)}">${esc(provShort(n))}</option>`).join("")}</datalist>
+      </div>
       <div class="provwrap">
         <div class="indbars">
           ${hbars(sorted.map(r => ({
@@ -1424,7 +1663,8 @@
           <details class="foldtable">
             <summary><b>省份明细表</b>（${sorted.length} 行）<span class="fthint"><i class="fc">默认折叠，点开查看</i><i class="fo">已展开，点击收起</i></span>
               <button class="xbtn foldcsv" data-act="csv" data-pfx="区域明细">下载 CSV</button></summary>
-            <div class="tablewrap"><table class="dt">
+            <input class="tsearch" id="provfilter" placeholder="在表里筛省份…" autocomplete="off">
+            <div class="tablewrap"><table class="dt" id="provtableel">
               <thead><tr><th>省份</th><th>梯队</th><th>样本</th><th>企业数</th><th>出海率</th>
               <th>渗透度中位</th><th>溢价中位</th><th>溢价为正</th><th>容量(亿)</th></tr></thead>
               <tbody>${sorted.map(r => {
@@ -1486,6 +1726,7 @@
     /* 三条止损规则：默认总趋势 + 按行业定制 */
     const rules = exitRules(mode, exitInd, src);
 
+    /* 只保留短名，下拉 84 项太长；搜索框负责「快速定位」 */
     const indOptions = IND.filter(n => INDKM[n]).map(n => `<option value="${esc(n)}"${n === exitInd ? " selected" : ""}>${esc(shortName(n))}</option>`).join("");
 
     return `
@@ -1500,7 +1741,10 @@
         <button class="sw${mode === "industry" ? " on" : ""}" data-exitmode="industry">按行业定制</button>
       </div>
       ${mode === "industry" ? `<div class="pickerrow">
-        <label>选择行业</label>
+        <label>搜行业</label>
+        <input class="tsearch" id="exitq" list="exitlist" placeholder="输入行业名快速定位" autocomplete="off">
+        <datalist id="exitlist">${IND.filter(n => INDKM[n]).map(n => `<option value="${esc(n)}">${esc(shortName(n))}</option>`).join("")}</datalist>
+        <label>当前</label>
         <select id="exitind">${indOptions}</select>
         <span class="hint dim">${exitInd && INDKM[exitInd] ? `该行业 ${INDKM[exitInd].n_firms} 家出海企业，${INDKM[exitInd].n_exit} 次退出。` : ""}</span>
       </div>` : ""}
@@ -1521,11 +1765,12 @@
         ${advice}
       </div>
       <div class="card">
-        <h3>四条能直接用的止损规则${src ? "（已按 " + esc(shortName(exitInd)) + " 定制）" : "（全样本默认）"}</h3>
-        <ol class="rules">${rules.map(r => `
-          <li><b>${esc(r.title)}</b>
-            <p class="rcond">${r.body}</p>
-            <p class="ract">${r.detail}</p></li>`).join("")}</ol>
+        <h3>四条能直接用的止损规则${src ? "（已按 " + esc(shortName(exitInd)) + " 定制）" : "（全样本默认）"}
+          <em style="font-style:normal;font-size:11.5px;font-weight:500;color:var(--muted)">写进决策文件，不靠临场判断</em></h3>
+        <ul class="rulemini">${rules.map((r, i) => `
+          <li><span class="rn">${i + 1}</span>
+            <span><b>${esc(r.title)}</b> —— ${r.body}<br>
+            <span class="dim">→ ${r.detail}</span></span></li>`).join("")}</ul>
       </div>
     </section>`;
   }
@@ -1596,6 +1841,7 @@
 
   function exitRules(mode, exitInd, src) {
     const S = D.survival;
+    const RIMP = relImp(D.model.risk.imp, 2);
     const lc7 = D.lifecycle.find(l => l.k === 7);
     const lc8 = D.lifecycle.find(l => l.k === 8);
     const k1 = src ? src.km[0] : S.km[0];
@@ -1640,7 +1886,7 @@
 
     const r4 = {
       title: `相对位置止损：溢价落后同行中位 5pp 以上`,
-      body: `连续两个对标周期（半年一次）都落后同行中位 5pp 以上。预测模型里权重最高的两个特征就是${featName(D.model.risk.imp[0][0])}（${(D.model.risk.imp[0][1] * 100).toFixed(1)}%）和${featName(D.model.risk.imp[1][0])}（${(D.model.risk.imp[1][1] * 100).toFixed(1)}%）。`,
+      body: `连续两个对标周期（半年一次）都落后同行中位 5pp 以上。预测模型里权重最高的两个特征就是${featName(RIMP[0][0])}（相对权重 ${RIMP[0][1].toFixed(1)}%）和${featName(RIMP[1][0])}（${RIMP[1][1].toFixed(1)}%）。`,
       detail: `每半年跟同行业同规模的企业比一次溢价中位，连续两期落后就停止追加投入。`,
     };
     return [r1, r2, r3, r4];
@@ -1691,7 +1937,7 @@
     /* 行 */
     inds.forEach((ind, i) => {
       const y0 = padT + i * rowH;
-      g += txt(labelW - 9, y0 + rowH / 2 + 3.8, shortName(ind),
+      g += txt(labelW - 9, y0 + rowH / 2 + 3.8, clip(shortName(ind), labelW - 16, 11),
         { anchor: "end", size: 11, fill: "#3D4859" });
       years.forEach((y, j) => {
         const v = discloseRate(ind, y);
@@ -1791,11 +2037,15 @@
         （全样本溢价可算率 ${pct(YT[YEARS[0]].gap_cov)} → ${pct(yt.gap_cov)}，
         出海企业内 ${pct(YT[YEARS[0]].gap_cov_ovs)} → ${pct(yt.gap_cov_ovs)}），
         以及哪些行业长期只有个位数样本——那些行业的溢价结论要打折看。</p>
-      <div class="heatwrap">${heatmap(inds, YEARS)}</div>
-      <div class="heatlegend">
-        <span>0%</span><span class="bar"></span><span>100%</span>
-        <span style="margin-left:10px">按 ${LAST} 年披露率从高到低排序；鼠标悬停看具体数值</span>
-      </div>
+      <details class="foldtable">
+        <summary><b>展开 ${inds.length} 个行业 × ${YEARS.length} 年的完整热力图</b>
+          <span class="fthint"><i class="fc">默认收起，点开看全量</i><i class="fo">已展开，点击收起</i></span></summary>
+        <div class="heatwrap">${heatmap(inds, YEARS)}</div>
+        <div class="heatlegend">
+          <span>0%</span><span class="bar"></span><span>100%</span>
+          <span style="margin-left:10px">按 ${LAST} 年披露率从高到低排序；鼠标悬停看具体数值</span>
+        </div>
+      </details>
     </section>
 
     <section class="card">
@@ -1816,30 +2066,41 @@
     </section>`;
   }
 
-  /* ==================== 总观页一键总结 ==================== */
-  function overviewSummary(y, yo, okRows, byGap, byGate, byCap) {
-    const best = byGap[0], easy = byGate[0], big = byCap[0];
+  /* ==================== 总观页一键总结（放在页面最前） ====================
+     这是「这一年到底发生了什么」的 30 秒版本：规模、赚不赚、往哪进、注意什么。
+     所有数字按当前年份现算，切年份整段重写。 */
+  function overviewSummary(y, yo, okRows) {
+    const yPrev = y > YEARS[0] ? YO[y - 1] : null;
+    const ny = yPrev ? y - 1 : null;
+    const win = okRows.filter(r => r.gap_med > 0).sort((a, b) => b.gap_med - a.gap_med);
+    const byGate = okRows.filter(r => r.gate_med != null).sort((a, b) => a.gate_med - b.gate_med);
+    const byCap = okRows.slice().sort((a, b) => (b.cap || 0) - (a.cap || 0));
+    const best = win[0], easy = byGate[0], big = byCap[0];
+    const enter = win.filter(r => r.gate_med != null && r.gate_med <= 0.5);
+
     const lines = [];
-    lines.push(`<b>${y} 年整体</b>：${pct(yo.ovs_rate)} 的企业有海外收入，溢价中位 ${sign(yo.gap_med)}pp，
-      只有 ${pct(yo.gap_cov)} 的出海企业能算出溢价（其余没披露海外成本，不给假数值）。`);
-    if (best) lines.push(`<b>溢价最高</b>是 ${esc(shortName(best.ind))}（${sign(best.gap_med)}pp），<b>门槛最低</b>是 ${esc(shortName(easy.ind))}（${(easy.gate_med * 100).toFixed(0)} 分位），
-      <b>容量最大</b>是 ${esc(shortName(big.ind))}（${fmt(big.cap, 0)} 亿）。`);
-    /* 规模和门槛的关系 */
+    lines.push(`<b>规模</b>：${y} 年 ${pct(yo.ovs_rate)} 的企业有海外收入（${yo.ovs_n.toLocaleString()} 家），
+      海外收入合计 <b>${fmt(yo.cap, 0)} 亿元</b>${ny && yPrev.cap != null ? `，比 ${ny} 年${yo.cap >= yPrev.cap ? "多" : "少"} ${fmt(Math.abs(yo.cap - yPrev.cap), 0)} 亿元` : ""}。
+      出海率${ny ? `从 ${pct(yPrev.ovs_rate)} 变成 <b>${pct(yo.ovs_rate)}</b>` : `为 ${pct(yo.ovs_rate)}`}。`);
+
+    lines.push(`<b>赚不赚</b>：出海溢价中位 <b>${sign(yo.gap_med)}pp</b>（海外毛利率比境内高多少），
+      ${pct(yo.pos_share)} 的企业溢价为正；样本够用的 <b>${okRows.length}</b> 个行业里 <b>${win.length}</b> 个为正
+      ${ny ? `（${ny} 年 ${YO[ny].ind_ok} 个行业够用、${IND.map(n => IY[n + "|" + ny]).filter(Boolean).filter(r => r.gap_med > 0 && r.gap_n >= 30).length} 个为正）` : ""}。
+      ${yo.gap_cov < 70 ? `注意：只有 ${pct(yo.gap_cov)} 的出海企业能算出溢价，其余没披露海外成本，不给假数值。` : ""}`);
+
+    if (best) lines.push(`<b>往哪进</b>：溢价最高是 <b>${esc(shortName(best.ind))}</b>（${sign(best.gap_med)}pp）${easy ? `，
+      门槛最低是 <b>${esc(shortName(easy.ind))}</b>（${(easy.gate_med * 100).toFixed(0)} 分位）` : ""}${big ? `，
+      池子最深是 <b>${esc(shortName(big.ind))}</b>（${fmt(big.cap, 0)} 亿）` : ""}。
+      同时满足「门槛 ≤50 分位」和「溢价为正」的行业有 <b>${enter.length}</b> 个。`);
+
     const t0 = TY[y + "|0-10%"], t9 = TY[y + "|90-100%"];
-    if (t0 && t9) {
-      lines.push(`<b>规模越大出海越多，但溢价越低</b>：规模最低 10% 出海率 ${pct(t0.ovs_rate)}、溢价 ${sign(t0.gap_med)}pp；
-        最高 10% 出海率 ${pct(t9.ovs_rate)}、溢价 ${sign(t9.gap_med)}pp。大公司出海更像规模扩张，小公司出海才是找利基。`);
-    }
-    if (yo.ind_ok < yo.ind_all) {
-      lines.push(`<b>口径提醒</b>：${y} 年只有 ${yo.ind_ok}/${yo.ind_all} 个行业的溢价样本达到 30 个，
-        行业层面的结论在这一年要保守看。${y <= 2017 ? "早年份整体披露率只有 " + pct(yo.gap_cov) + "，横向比较的可信度更低。" : ""}`);
-    }
-    lines.push(`<b>归因</b>：溢价的主要驱动不是「海外更赚钱」，而是「境内毛利率低」。
-      归因模型里境内毛利率的重要性（${fmt(D.model.attrib.imp[0][1], 3)}）是第二名（${fmt(D.model.attrib.imp[1][1], 3)}）的 ${(D.model.attrib.imp[0][1] / D.model.attrib.imp[1][1]).toFixed(1)} 倍。
-      <b>但要注意</b>：出海溢价 = 海外毛利率 − 境内毛利率，境内毛利率是它的<b>分母</b>，排第一是定义使然，不是新发现。
-      把它剔除后重跑，剩下最能解释溢价的是${D.model.attrib.imp2 ? featName(D.model.attrib.imp2[0][0]) : "—"}（重要性 ${D.model.attrib.imp2 ? fmt(D.model.attrib.imp2[0][1], 3) : "—"}），
-      模型的解释力从 R² ${fmt(D.model.attrib.r2, 3)} 降到 ${fmt(D.model.attrib.r2_ex_dom, 3)}。`);
-    return summaryBox(`一键总结 · ${y} 年出海质量`, lines);
+    if (t0 && t9) lines.push(`<b>规模与溢价反向</b>：规模最低 10% 的企业出海率 ${pct(t0.ovs_rate)}、溢价 ${sign(t0.gap_med)}pp；
+      最高 10% 出海率 ${pct(t9.ovs_rate)}、溢价 ${sign(t9.gap_med)}pp。大公司出海更像规模扩张，小公司出海才是找利基。`);
+
+    if (yo.ind_ok < yo.ind_all) lines.push(`<b>读的时候注意</b>：${y} 年只有 ${yo.ind_ok}/${yo.ind_all} 个行业的溢价样本达到 30 个，
+      行业层面的结论在这一年要保守看${y <= 2017 ? `；且当年整体披露率只有 ${pct(yo.gap_cov)}，横向比较的可信度更低` : ""}。`);
+
+    return summaryBox(`一键总结 · ${y} 年出海质量`, lines, "sumfirst");
   }
 
   /* ==================== 视图：企业（一页看完） ==================== */
@@ -2172,11 +2433,14 @@
       ? firmOvsBody({ f, code, name, indName, provName, o, h, x, indRow, provRow, st, rules, stops, gap, gapBad, ratio, sizePct, tenure, risk, verdict, gapVsInd, domGm, ratioPct, domPct, p1, p2, pImp })
       : firmNoBody({ f, code, name, indName, provName, o, h, x, indRow, provRow, peer, sizePct, ratio, p1, p2, pImp });
 
+    /* 一键总结放最前：先给结论，再看证据。 */
+    const sumBlock = firmSummary({ f, code, name, indName, provName, o, indRow, provRow, st, rules, stops, hasOvs, gap, verdict, tenure, risk, sizePct, ratio, ratioPct, p1, p2 });
+
     /* v5：预测模块 + 2025 最新成绩，插在体检头部之后、正文之前 */
     const fcBlock = viewForecastBlock(code, name, gap, ratio);
     const y25Block = viewY25Block(code, name);
 
-    return head + fcBlock + y25Block + body + firmSummary({ f, code, name, indName, provName, o, indRow, provRow, st, rules, stops, hasOvs, gap, verdict, tenure, risk, sizePct, ratio });
+    return sumBlock + head + fcBlock + y25Block + body;
   }
 
   /* ==================== v5：未来三年预测模块 ==================== */
@@ -3004,6 +3268,14 @@
     return summaryBox(`一键总结 · ${name}`, lines);
   }
 
+  /* 置换重要性的原始值不是 0–1 的比例，直接 ×100 会显示成 13152% 这种数字。
+     统一换算成「相对权重」：占全部特征重要性之和的百分比，读者才对得上。 */
+  function relImp(list, k) {
+    if (!list || !list.length) return [];
+    const sum = list.reduce((s, x) => s + (x[1] || 0), 0) || 1;
+    return list.slice(0, k || list.length).map(x => [x[0], x[1] / sum * 100]);
+  }
+
   /* ==================== 中位数工具 ==================== */
   function median(arr) {
     const v = arr.filter(x => x != null).sort((a, b) => a - b);
@@ -3018,7 +3290,8 @@
   function drawerHTML() {
     const m = D.meta, mo = D.model;
     const f1 = mo.risk.folds[0] || {}, f2 = mo.risk.folds[1] || {};
-    const att = (mo.attrib && mo.attrib.imp) ? mo.attrib.imp[0] : null;
+    const AIMP = relImp((mo.attrib && mo.attrib.imp) || [], 1);
+    const att = AIMP.length ? AIMP[0] : null;
     const km = D.survival.km;
     const km10 = km[km.length - 1];
 
@@ -3037,7 +3310,7 @@
         "10 年存活 <b>" + (km10 ? km10.surv : "—") + "%</b>"],
       ["⑤ 溢价归因", "permutation importance", "模型解释",
         "置换 " + (mo.attrib ? "全特征" : "—") + " 后 AUC 下降幅度",
-        att ? esc(att[0]) + " <b>" + (att[1] * 100).toFixed(1) + "%</b>" : "—"],
+        att ? esc(featName(att[0])) + " <b>" + att[1].toFixed(1) + "%</b>" : "—"],
       ["⑥ 决策规则", "6 条可解释硬信号（规则层）", "规则层",
         "每条都写明触发依据", "命中即给依据"],
       ["⑦ 未来三年预测", "AR(1) 均值回复 + 三情景", "时间序列",
@@ -3097,15 +3370,14 @@
     <div class="mdrawer-panel">
       <div class="mdrawer-head">
         <div>
-          <h2>数据说明</h2>
-          <p>数据从哪来 · 怎么验证的 · AI 在哪些环节起了作用</p>
+          <h2>建模环节</h2>
         </div>
         <button class="mdrawer-close" id="mclose">关闭 ✕</button>
       </div>
       <div class="mdrawer-body">
 
         <div class="card">
-          <h3>AI 与建模环节 <em>8 个环节，全部可复现</em></h3>
+          <h3>建模环节 <em>8 个环节，全部可复现</em></h3>
           <table class="mtable">
             <thead><tr><th>环节</th><th>方法</th><th>验证方式</th><th>结果</th></tr></thead>
             <tbody>${methods.map(r => `<tr>
@@ -3261,6 +3533,47 @@
     /* 退出行业选择 */
     const sel = $("#exitind");
     if (sel) sel.onchange = () => { STATE.exitInd = sel.value; render(STATE.tab); };
+    /* 退出诊断的行业搜索（84 项下拉一个个翻太慢） */
+    const eq = $("#exitq");
+    if (eq) eq.onchange = () => {
+      const v = (eq.value || "").trim();
+      if (!v) return;
+      const pool = Object.keys(INDKM);
+      const hit = pool.find(n => n === v) || pool.find(n => shortName(n) === v || indShort(n, 200) === v)
+        || pool.find(n => n.indexOf(v) >= 0);
+      if (hit) { STATE.exitInd = hit; render(STATE.tab); }
+    };
+    /* 行业搜索：datalist 选中即切行业 */
+    const iq = $("#indq");
+    if (iq) iq.onchange = () => {
+      const v = (iq.value || "").trim();
+      if (!v) return;
+      const hit = IND.find(n => n === v) || IND.find(n => shortName(n) === v || indShort(n, 200) === v)
+        || IND.find(n => n.indexOf(v) >= 0);
+      if (hit) { STATE.indPick = hit; render(STATE.tab); }
+    };
+    /* 表格内筛选：所有明细表都支持边打字边过滤 */
+    const filt = (input, tableSel) => {
+      if (!input) return;
+      input.oninput = () => {
+        const q = input.value.trim().toLowerCase();
+        const tb = $(tableSel);
+        if (!tb) return;
+        tb.querySelectorAll("tbody tr").forEach(tr => {
+          tr.style.display = (!q || (tr.textContent || "").toLowerCase().indexOf(q) >= 0) ? "" : "none";
+        });
+      };
+    };
+    filt($("#indfilter"), "#indtableel");
+    filt($("#provfilter"), "#provtableel");
+    /* 省份搜索 */
+    const pq = $("#provq");
+    if (pq) pq.onchange = () => {
+      const v = (pq.value || "").trim();
+      if (!v) return;
+      const hit = PROV.find(n => n === v) || PROV.find(n => provShort(n) === v) || PROV.find(n => n.indexOf(v) >= 0);
+      if (hit) { STATE.provPick = hit; render(STATE.tab); }
+    };
     /* 行业选择：条形图 + 表格 */
     $$('[data-ind]').forEach(el => el.onclick = () => {
       STATE.indPick = el.dataset.ind; render(STATE.tab);
